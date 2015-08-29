@@ -16,7 +16,12 @@ IndexSet(points.getElementCount(1), points.getElementCount(0)) {
     _indexList = new uint64_t[indexLength];
     if (_indexList == NULL)
         throw ENotEnoughMemory();
-    memcpy(_indexList, points.getData(), indexLength * sizeof (uint64_t));
+    if (points.getElementType() == ArrayShape::UINT64)
+        memcpy(_indexList, points.getData(), indexLength * sizeof (uint64_t));
+    else {
+        LocalArray properTyped(ArrayShape::UINT64, points);
+        memcpy(_indexList, properTyped.getData(), indexLength * sizeof (uint64_t));
+    }
     this->initConstantIterators();
     if (_begin == NULL || _end == NULL || _curr == NULL)
         throw ENotEnoughMemory();

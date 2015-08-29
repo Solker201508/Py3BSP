@@ -157,6 +157,41 @@ extern "C" {
         return Py_BuildValue("O",Py_True);
     }
 
+    LocalArray *bsp_convertNumpy(PyArrayObject *numpyArray, const char *path) {
+        int nDims = PyArray_NDIM(numpyArray);
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        char *data = PyArray_BYTES(numpyArray);
+        char kind = 'i';
+        if (PyArray_ISINTEGER(numpyArray)) {
+            if (PyArray_ISUNSIGNED(numpyArray))
+                kind = 'u';
+            else
+                kind = 'i';
+        } else if (PyArray_ISCOMPLEX(numpyArray)) {
+            kind = 'c';
+        } else if (PyArray_ISFLOAT(numpyArray)) {
+            kind = 'f';
+        }
+        try {
+            return runtime_->fromBuffer(data, kind, nDims, dimSize, strides, path);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+            return NULL;
+        }
+    }
+
+    LocalArray *bsp_convertObject(PyObject *object, const char *path) {
+        if (PyArray_Check(object))
+            return bsp_convertNumpy((PyArrayObject *)object, path);
+        else {
+            PyArrayObject *numpyArray = (PyArrayObject *)PyArray_FROM_O(object);
+            LocalArray *result = bsp_convertNumpy(numpyArray, path);
+            Py_XDECREF(numpyArray);
+            return result;
+        }
+    }
+
     // OK = bsp.fromNumpy(numpyArray,arrayPath)
     static PyObject *bsp_fromNumpy(PyObject *self, PyObject *args) {
         PyObject *input = NULL;
@@ -174,30 +209,12 @@ extern "C" {
             return Py_BuildValue("O",Py_False);
         }
         PyArrayObject *numpyArray = (PyArrayObject *)input;
-        int nDims = PyArray_NDIM(numpyArray);
-        npy_intp *dimSize = PyArray_DIMS(numpyArray);
-        npy_intp *strides = PyArray_STRIDES(numpyArray);
-        char *data = PyArray_BYTES(numpyArray);
-        char kind = 'i';
-        if (PyArray_ISINTEGER(numpyArray)) {
-            if (PyArray_ISUNSIGNED(numpyArray))
-                kind = 'u';
-            else
-                kind = 'i';
-        } else if (PyArray_ISCOMPLEX(numpyArray)) {
-            kind = 'c';
-        } else if (PyArray_ISFLOAT(numpyArray)) {
-            kind = 'f';
-        }
-        try {
-            runtime_->fromBuffer(data, kind, nDims, dimSize, strides, path);
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            Py_XDECREF(input);
-            return Py_BuildValue("O",Py_False);
-        }
+        LocalArray *localArray = bsp_convertNumpy(numpyArray,path);
         Py_XDECREF(input);
-        return Py_BuildValue("O",Py_True);
+        if (localArray)
+            return Py_BuildValue("O",Py_True);
+        else
+            return Py_BuildValue("O",Py_False);
     }
 
     // object = bsp.toObject(arrayPath)
@@ -481,30 +498,47 @@ extern "C" {
 
     // OK = bsp.delete(up-to-10-paths)
     static PyObject *bsp_delete(PyObject *self, PyObject *args) {
-        char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
-        int ok = PyArg_ParseTuple(args, "s|sssssssss:bsp.delete",
-                path + 0,
-                path + 1,
-                path + 2,
-                path + 3,
-                path + 4,
-                path + 5,
-                path + 6,
-                path + 7,
-                path + 8,
-                path + 9);
+        PyObject *obj[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
+        int ok = PyArg_ParseTuple(args, "O|OOOOOOOOO:bsp.delete",
+                obj + 0,
+                obj + 1,
+                obj + 2,
+                obj + 3,
+                obj + 4,
+                obj + 5,
+                obj + 6,
+                obj + 7,
+                obj + 8,
+                obj + 9);
         if (!ok) {
-            bsp_typeError("invalid dtype for bsp.delete(up-to-10-paths)");
+            bsp_typeError("invalid dtype for bsp.delete(up-to-10-paths-or-indsets)");
             return Py_BuildValue("O",Py_False);
         }
         for (int i = 0; i < 10; ++i) {
-            if (NULL == path[i])
+            if (NULL == obj[i])
                 break;
             try {
-                runtime_->deleteObject(std::string(path[i]));
+                if (PyUnicode_Check(obj[i])) {
+                    runtime_->deleteObject(std::string(PyUnicode_AsUTF8(obj[i])));
+                } else if (PyLong_Check(obj[i])) {
+                    long j = PyLong_AsLong(obj[i]);
+                    if (idToIndexSet_.find(j) != idToIndexSet_.end()) {
+                        IndexSet *indexSet = idToIndexSet_[j];
+                        if (activeIndexSet_ == indexSet)
+                            activeIndexSet_ = NULL;
+                        indexSetToID_.erase(indexSet);
+                        idToIndexSet_.erase(j);
+                        if (indexSet)
+                            delete indexSet;
+                    }
+                } else {
+                    std::stringstream ssErr;
+                    ssErr << "invalid argument " << i << " for bsp.delete" << std::endl;
+                    bsp_typeError(ssErr.str().c_str());
+                }
             } catch (const std::exception &e) {
                 std::stringstream ssErr;
-                ssErr << "failed to delete " << path[i] << ": " << e.what();
+                ssErr << "failed to delete " << obj[i] << ": " << e.what();
                 bsp_runtimeError(ssErr.str());
                 return Py_BuildValue("O",Py_False);
             }
@@ -638,59 +672,98 @@ extern "C" {
         return Py_BuildValue("O",Py_True);
     }
 
-    IndexSet *bsp_regionTensor(unsigned n, char **lowerPath, char **upperPath) {
+    IndexSet *bsp_regionTensor(unsigned n, PyObject **lowerObject, PyObject **upperObject) {
         LocalArray *lower[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
         LocalArray *upper[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
         try {
             for (unsigned i = 0; i < n; ++i) {
-                NamedObject *nobjLower = runtime_->getObject(std::string(lowerPath[i]));
-                lower[i] = nobjLower->_localArray();
-
-                NamedObject *nobjUpper = runtime_->getObject(std::string(upperPath[i]));
-                upper[i] = nobjUpper->_localArray();
+                if (PyUnicode_Check(lowerObject[i])) {
+                    NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject[i])));
+                    lower[i] = nobjLower->_localArray();
+                } else 
+                    lower[i] = bsp_convertObject(lowerObject[i], "");
+                if (PyUnicode_Check(upperObject[i])) {
+                    NamedObject *nobjUpper = runtime_->getObject(std::string(PyUnicode_AsUTF8(upperObject[i])));
+                    upper[i] = nobjUpper->_localArray();
+                } else
+                    upper[i] = bsp_convertObject(upperObject[i], "");
             }
-            return new IndexSetRegionTensor(n,lower,upper);
+            IndexSet *result = new IndexSetRegionTensor(n,lower,upper);
+            for (unsigned i = 0; i < n; ++i) {
+                if (!PyUnicode_Check(lowerObject[i]))
+                    delete lower[i];
+                if (!PyUnicode_Check(upperObject[i]))
+                    delete upper[i];
+            }
+            return result;
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             return NULL;
         }
     }
 
-    IndexSet *bsp_pointTensor(unsigned n, char **lowerPath) {
+    IndexSet *bsp_pointTensor(unsigned n, PyObject **lowerObject) {
         LocalArray *lower[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
         try {
             for (unsigned i = 0; i < n; ++i) {
-                NamedObject *nobjLower = runtime_->getObject(std::string(lowerPath[i]));
-                lower[i] = nobjLower->_localArray();
+                if (PyUnicode_Check(lowerObject[i])) {
+                    NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject[i])));
+                    lower[i] = nobjLower->_localArray();
+                } else 
+                    lower[i] = bsp_convertObject(lowerObject[i], "");
             }
-            return new IndexSetPointTensor(n,lower);
+            IndexSet *result = new IndexSetPointTensor(n,lower);
+            for (unsigned i = 0; i < n; ++i) {
+                if (!PyUnicode_Check(lowerObject[i]))
+                    delete lower[i];
+            }
+            return result;
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             return NULL;
         }
     }
 
-    IndexSet *bsp_regionSequence(char *lowerPath, char *upperPath) {
+    IndexSet *bsp_regionSequence(PyObject *lowerObject, PyObject *upperObject) {
         try {
-            NamedObject *nobjLower = runtime_->getObject(std::string(lowerPath));
-            LocalArray *lower = nobjLower->_localArray();
+            LocalArray *lower = NULL;
+            if (PyUnicode_Check(lowerObject)) {
+                NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject)));
+                lower = nobjLower->_localArray();
+            } else
+                lower = bsp_convertObject(lowerObject,"");
+            LocalArray *upper = NULL;
+            if (PyUnicode_Check(upperObject)) {
+                NamedObject *nobjUpper = runtime_->getObject(std::string(PyUnicode_AsUTF8(upperObject)));
+                upper = nobjUpper->_localArray();
+            } else
+                upper = bsp_convertObject(upperObject,"");
 
-            NamedObject *nobjUpper = runtime_->getObject(std::string(upperPath));
-            LocalArray *upper = nobjUpper->_localArray();
-
-            return new IndexSetRegionSequence(*lower,*upper);
+            IndexSet *result = new IndexSetRegionSequence(*lower,*upper);
+            if (!PyUnicode_Check(lowerObject))
+                delete lower;
+            if (!PyUnicode_Check(upperObject))
+                delete upper;
+            return result;
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             return NULL;
         }
     }
 
-    IndexSet *bsp_pointSequence(char *lowerPath) {
+    IndexSet *bsp_pointSequence(PyObject *lowerObject) {
         try {
-            NamedObject *nobjLower = runtime_->getObject(std::string(lowerPath));
-            LocalArray *lower = nobjLower->_localArray();
+            LocalArray *lower = NULL;
+            if (PyUnicode_Check(lowerObject)) {
+                NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject)));
+                lower = nobjLower->_localArray();
+            } else
+                lower = bsp_convertObject(lowerObject,"");
 
-            return new IndexSetPointSequence(*lower);
+            IndexSet *result = new IndexSetPointSequence(*lower);
+            if (!PyUnicode_Check(lowerObject))
+                delete lower;
+            return result;
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             return NULL;
@@ -698,27 +771,31 @@ extern "C" {
     }
 
     static PyObject *bsp_createPointSet(PyObject *self, PyObject *args) {
-        char *lowerPath[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+        PyObject *lowerObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
         IndexSet *indexSet = NULL;
-        if (PyArg_ParseTuple(args, "s|ssssss:bsp.createPointSet",
-                    lowerPath+0,
-                    lowerPath+1,
-                    lowerPath+2,
-                    lowerPath+3,
-                    lowerPath+4,
-                    lowerPath+5,
-                    lowerPath+6
+        if (PyArg_ParseTuple(args, "O|OOOOOO:bsp.createPointSet",
+                    lowerObject+0,
+                    lowerObject+1,
+                    lowerObject+2,
+                    lowerObject+3,
+                    lowerObject+4,
+                    lowerObject+5,
+                    lowerObject+6
                     )){
-            int n = 1;
-            for (int i = 1; i < 7; ++i) {
-                if (lowerPath[i] == NULL)
+            int n = 0;
+            for (int i = 0; i < 7; ++i) {
+                if (lowerObject[i] == NULL)
                     break;
+                Py_XINCREF(lowerObject[i]);
                 ++n;
             }
             if (n > 1) {
-                indexSet = bsp_pointTensor(n,lowerPath);
+                indexSet = bsp_pointTensor(n,lowerObject);
             } else {
-                indexSet = bsp_pointSequence(lowerPath[0]);
+                indexSet = bsp_pointSequence(lowerObject[0]);
+            }
+            for (int i = 0; i < n; ++i) {
+                Py_XDECREF(lowerObject[i]);
             }
         } else {
             bsp_typeError("invalid arguments for bsp.createPointSet");
@@ -733,27 +810,33 @@ extern "C" {
     }
 
     static PyObject *bsp_createRegionSet(PyObject *self, PyObject *args) {
-        char *lowerPath[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        char *upperPath[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+        PyObject *lowerObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+        PyObject *upperObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
         IndexSet *indexSet = NULL;
-        if (PyArg_ParseTuple(args, "(ss)|(ss)(ss)(ss)(ss)(ss)(ss):bsp.createRegionSet",
-                    lowerPath+0,upperPath+0,
-                    lowerPath+1,upperPath+1,
-                    lowerPath+2,upperPath+2,
-                    lowerPath+3,upperPath+3,
-                    lowerPath+4,upperPath+4,
-                    lowerPath+5,upperPath+5,
-                    lowerPath+6,upperPath+6)) {
-            int n = 1;
-            for (int i = 1; i < 7; ++i) {
-                if (lowerPath[i] == NULL)
+        if (PyArg_ParseTuple(args, "(OO)|(OO)(OO)(OO)(OO)(OO)(OO):bsp.createRegionSet",
+                    lowerObject+0,upperObject+0,
+                    lowerObject+1,upperObject+1,
+                    lowerObject+2,upperObject+2,
+                    lowerObject+3,upperObject+3,
+                    lowerObject+4,upperObject+4,
+                    lowerObject+5,upperObject+5,
+                    lowerObject+6,upperObject+6)) {
+            int n = 0;
+            for (int i = 0; i < 7; ++i) {
+                if (lowerObject[i] == NULL)
                     break;
+                Py_XINCREF(lowerObject[i]);
+                Py_XINCREF(upperObject[i]);
                 ++n;
             }
             if (n > 1) {
-                indexSet = bsp_regionTensor(7,lowerPath,upperPath);
+                indexSet = bsp_regionTensor(n,lowerObject,upperObject);
             } else {
-                indexSet = bsp_regionSequence(lowerPath[0],upperPath[0]);
+                indexSet = bsp_regionSequence(lowerObject[0],upperObject[0]);
+            }
+            for (int i = 0; i < n; ++i) {
+                Py_XDECREF(lowerObject[i]);
+                Py_XDECREF(upperObject[i]);
             }
         } else {
             bsp_typeError("invalid arguments for bsp.createRegionSet");
@@ -765,31 +848,6 @@ extern "C" {
         idToIndexSet_[i] = indexSet;
         indexSetToID_[indexSet] = i;
         return Py_BuildValue("i",i);
-    }
-
-    // OK = bsp.deleteIndexSet(indexSet)
-    static PyObject *bsp_deleteIndexSet(PyObject *self, PyObject *args) {
-        int i = 0;
-        int ok = PyArg_ParseTuple(args, "i:bsp.deleteIndexSet",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.deleteIndexSet(indexSet)");
-            return Py_BuildValue("O",Py_False);
-        }
-        try {
-            if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                if (activeIndexSet_ == indexSet)
-                    activeIndexSet_ = NULL;
-                indexSetToID_.erase(indexSet);
-                idToIndexSet_.erase(i);
-                if (indexSet)
-                    delete indexSet;
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
-        }
-        return Py_BuildValue("O",Py_True);
     }
 
     // indexCount = bsp.indexCount(indexSet)
@@ -1334,7 +1392,6 @@ extern "C" {
         {"privatize",bsp_privatize,METH_VARARGS,"privatize share/global arrays"},
         {"createRegionSet",bsp_createRegionSet,METH_VARARGS,"create an region index-set"},
         {"createPointSet",bsp_createPointSet,METH_VARARGS,"create an Point index-set"},
-        {"deleteIndexSet",bsp_deleteIndexSet,METH_VARARGS,"delete an index-set"},
         {"indexCount",bsp_indexCount,METH_VARARGS,"get the count of indices in an index set"},
         {"regionCount",bsp_regionCount,METH_VARARGS,"get the count of regions in an index set"},
         {"resetIterator",bsp_resetIterator,METH_VARARGS,"reset the iterator of an index set"},

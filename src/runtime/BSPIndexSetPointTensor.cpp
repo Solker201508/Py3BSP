@@ -17,16 +17,20 @@ computeNumberOfIndices(numberOfDimensions, componentAlongDim)) {
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
         _numberOfComponentsAlongDim[iDim] =
                 componentAlongDim[iDim]->getElementCount(LocalArray::ALL_DIMS);
-        if (_numberOfComponentsAlongDim[iDim] == 0
-                || componentAlongDim[iDim]->getNumberOfBytesPerElement()
-                != sizeof (uint64_t))
+        if (_numberOfComponentsAlongDim[iDim] == 0)
             throw EInvalidArgument();
         _componentAlongDim[iDim] =
                 new uint64_t[_numberOfComponentsAlongDim[iDim]];
         if (_componentAlongDim[iDim] == NULL)
             throw ENotEnoughMemory();
-        memcpy(_componentAlongDim[iDim], componentAlongDim[iDim]->getData(),
-                _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        if (componentAlongDim[iDim]->getElementType() == ArrayShape::UINT64)
+            memcpy(_componentAlongDim[iDim], componentAlongDim[iDim]->getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        else {
+            LocalArray properTyped(ArrayShape::UINT64, *componentAlongDim[iDim]);
+            memcpy(_componentAlongDim[iDim], properTyped.getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        }
     }
     this->initConstantIterators();
     if (_begin == NULL || _end == NULL || _curr == NULL)

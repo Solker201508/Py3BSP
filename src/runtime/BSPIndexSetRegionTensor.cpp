@@ -32,11 +32,6 @@ uint64_t IndexSetRegionTensor::computeNumberOfIndices(
     _numberOfRegions = 1;
     uint64_t combination[7];
     for (unsigned iDim = 0; iDim < numberOfDimensions; iDim++) {
-        if (lowerComponentAlongDim[iDim]->getNumberOfBytesPerElement()
-                != sizeof (uint64_t)
-                || upperComponentAlongDim[iDim]->getNumberOfBytesPerElement()
-                != sizeof (uint64_t))
-            throw EInvalidArgument();
         _numberOfComponentsAlongDim[iDim] =
                 lowerComponentAlongDim[iDim]->getElementCount(
                 LocalArray::ALL_DIMS);
@@ -52,12 +47,26 @@ uint64_t IndexSetRegionTensor::computeNumberOfIndices(
         if (_lowerComponentAlongDim[iDim] == NULL
                 || _upperComponentAlongDim[iDim] == NULL)
             throw ENotEnoughMemory();
-        memcpy(_lowerComponentAlongDim[iDim],
-                lowerComponentAlongDim[iDim]->getData(),
-                _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
-        memcpy(_upperComponentAlongDim[iDim],
-                upperComponentAlongDim[iDim]->getData(),
-                _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        if (lowerComponentAlongDim[iDim]->getElementType() == ArrayShape::UINT64)
+            memcpy(_lowerComponentAlongDim[iDim],
+                    lowerComponentAlongDim[iDim]->getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        else {
+            LocalArray properTyped(ArrayShape::UINT64, *lowerComponentAlongDim[iDim]);
+            memcpy(_lowerComponentAlongDim[iDim],
+                    properTyped.getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        }
+        if (upperComponentAlongDim[iDim]->getElementType() == ArrayShape::UINT64)
+            memcpy(_upperComponentAlongDim[iDim],
+                    upperComponentAlongDim[iDim]->getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        else {
+            LocalArray properTyped(ArrayShape::UINT64, *upperComponentAlongDim[iDim]);
+            memcpy(_upperComponentAlongDim[iDim],
+                    properTyped.getData(),
+                    _numberOfComponentsAlongDim[iDim] * sizeof (uint64_t));
+        }
         combination[iDim] = 0;
         for (uint64_t iComponent = 0;
                 iComponent < _numberOfComponentsAlongDim[iDim]; iComponent++) {

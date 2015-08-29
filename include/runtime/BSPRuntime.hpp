@@ -210,7 +210,7 @@ namespace BSP {
         void fromString(std::string string, std::string path);
 
         /// @brief create nd local array from a buffer
-        void fromBuffer(const char *buffer, const char kind, const int nDims, const ssize_t *dimSize, const ssize_t *strides, std::string path);
+        LocalArray *fromBuffer(const char *buffer, const char kind, const int nDims, const ssize_t *dimSize, const ssize_t *strides, std::string path);
 
         /// @brief create string from 1d local array
         std::string toString(std::string path);

@@ -42,6 +42,14 @@ ArrayShape(serialization) {
     _path = path;
 }
 
+LocalArray::LocalArray(ElementType elementType, const LocalArray &orig) :
+ArrayShape(elementType, ArrayShape::elementSize(elementType), orig._numberOfDimensions,
+orig._numberOfElementsAlongDimension) {
+    mapData();
+    _registration = NULL;
+    copy(orig);
+}
+
 /// @brief null constructor for processes out of grid
 
 LocalArray::LocalArray() : ArrayShape() {
@@ -69,7 +77,7 @@ void LocalArray::unmapData() {
 }
 
 template<class TFrom, class TTo>
-void localArrayCopy(uint64_t n, char *cfrom, char *cto) {
+void localArrayCopy(uint64_t n, const char *cfrom, char *cto) {
     TFrom *from = (TFrom *) cfrom;
     TTo *to = (TTo *) cto;
     for (uint64_t i = 0; i < n; ++i)
@@ -77,7 +85,7 @@ void localArrayCopy(uint64_t n, char *cfrom, char *cto) {
 }
 
 template<class TFrom, class TTo>
-void localArrayCopyR2C(uint64_t n, char *cfrom, char *cto) {
+void localArrayCopyR2C(uint64_t n, const char *cfrom, char *cto) {
     TFrom *from = (TFrom *) cfrom;
     TTo *to = (TTo *) cto;
     for (uint64_t i = 0; i < n; ++i) {
@@ -86,7 +94,7 @@ void localArrayCopyR2C(uint64_t n, char *cfrom, char *cto) {
     }
 }
 template<class TFrom, class TTo>
-void localArrayCopyC2C(uint64_t n, char *cfrom, char *cto) {
+void localArrayCopyC2C(uint64_t n, const char *cfrom, char *cto) {
     TFrom *from = (TFrom *) cfrom;
     TTo *to = (TTo *) cto;
     for (uint64_t i = 0; i < n; ++i) {
@@ -95,7 +103,7 @@ void localArrayCopyC2C(uint64_t n, char *cfrom, char *cto) {
     }
 }
 
-void localArrayCopy(uint64_t n, uint64_t m, char *from, char *to) {
+void localArrayCopy(uint64_t n, uint64_t m, const char *from, char *to) {
     uint64_t mn = m * n;
     for (uint64_t i = 0; i < mn; i++)
         to[i] = from[i];
@@ -104,7 +112,7 @@ void localArrayCopy(uint64_t n, uint64_t m, char *from, char *to) {
 /// @brief copy array
 /// @param array the array to copy
 
-void LocalArray::copy(LocalArray &array) {
+void LocalArray::copy(const LocalArray &array) {
     bool equalSize = true;
     if (_numberOfDimensions != array._numberOfDimensions)
         equalSize = false;

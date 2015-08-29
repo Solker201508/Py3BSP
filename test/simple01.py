@@ -20,15 +20,7 @@ for i in range(10):
 bsp.globalize(0,(n1Dim,n1Dim),'arr.a1')
 
 # create an index-set for the request
-bsp.createArray('ind.lower1','u8',[2,2])
-bsp.createArray('ind.upper1','u8',[2,2])
-lower1=bsp.asNumpy('ind.lower1')
-upper1=bsp.asNumpy('ind.upper1')
-lower1[0][0] = 5; lower1[0][1] = 5
-upper1[0][0] = 14; upper1[0][1] = 14
-lower1[1][0] = 2; lower1[1][1] = 0
-upper1[1][0] = 11; upper1[1][1] = 9
-inds1=bsp.createRegionSet(('ind.lower1','ind.upper1'))
+inds1=bsp.createRegionSet(([[5,5],[2,0]],[[14,14],[11,9]]))
 #inds1=bsp.createPointSet('ind.lower1')
 
 # create a local array to store the update data

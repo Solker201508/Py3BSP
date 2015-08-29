@@ -1691,12 +1691,15 @@ void Runtime::fromString(std::string string, std::string path) {
 }
 
 /// @brief create nd local array from a buffer
-void Runtime::fromBuffer(const char *buffer, const char kind, const int nDims, const ssize_t *dimSize, const ssize_t *strides, std::string path) {
-    std::string objPath = simplifyPath(path);
-    if (hasObject(objPath)) {
-        NamedObject *nobj = getObjectByPath(objPath);
-        if (nobj->getType() != ARRAY || nobj->isGlobal())
-            throw EInvalidArgument();
+LocalArray *Runtime::fromBuffer(const char *buffer, const char kind, const int nDims, const ssize_t *dimSize, const ssize_t *strides, std::string path) {
+    std::string objPath = "";
+    if (path != "") {
+        objPath = simplifyPath(path);
+        if (hasObject(objPath)) {
+            NamedObject *nobj = getObjectByPath(objPath);
+            if (nobj->getType() != ARRAY || nobj->isGlobal())
+                throw EInvalidArgument();
+        }
     }
     ArrayShape::ElementType elemType = ArrayShape::BINARY;
     unsigned elemSize = 1;
@@ -1788,7 +1791,8 @@ void Runtime::fromBuffer(const char *buffer, const char kind, const int nDims, c
     LocalArray *localArray = new LocalArray(objPath, elemType, elemSize, nDims, myDimSize);
     if (localArray == NULL)
         throw ENotEnoughMemory();
-    setObject(objPath, localArray);
+    if (objPath != "")
+        setObject(objPath, localArray);
 
     bool contiguous = true;
     if (isFortranArray) {
@@ -1878,6 +1882,7 @@ void Runtime::fromBuffer(const char *buffer, const char kind, const int nDims, c
             }
         }
     }
+    return localArray;
 }
 
 /// @brief create string from 1d local array

@@ -32,7 +32,10 @@ public:
 	/// @param serialization the shape serialization
 	/// @param path the path of the array
 	LocalArray(std::string path, uint64_t *serialization);
-        
+
+        /// @brief type-casting constructor
+        LocalArray(ElementType elementType, const LocalArray &orig);
+
         /// @brief null constructor for processes out of grid
         LocalArray();
 
@@ -44,7 +47,7 @@ public:
 
 	/// @brief copy array
 	/// @param array the array to copy
-	void copy(LocalArray &array);
+	void copy(const LocalArray &array);
 
 	char *getData() {
 		return _data;

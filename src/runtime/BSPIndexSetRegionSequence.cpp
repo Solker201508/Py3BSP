@@ -35,10 +35,22 @@ uint64_t IndexSetRegionSequence::computeNumberOfIndices(LocalArray &lower,
     _upperIndexList = new uint64_t[numberOfDimensions * _numberOfRegions];
     if (_lowerIndexList == NULL || _upperIndexList == NULL)
         throw ENotEnoughMemory();
-    memcpy(_lowerIndexList, lower.getData(),
-            sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
-    memcpy(_upperIndexList, upper.getData(),
-            sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
+    if (lower.getElementType() == ArrayShape::UINT64)
+        memcpy(_lowerIndexList, lower.getData(),
+                sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
+    else {
+        LocalArray properTyped(ArrayShape::UINT64, lower);
+        memcpy(_lowerIndexList, properTyped.getData(),
+                sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
+    }
+    if (upper.getElementType() == ArrayShape::UINT64)
+        memcpy(_upperIndexList, upper.getData(),
+                sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
+    else {
+        LocalArray properTyped(ArrayShape::UINT64, upper);
+        memcpy(_upperIndexList, properTyped.getData(),
+                sizeof (uint64_t) * numberOfDimensions * _numberOfRegions);
+    }
 
     uint64_t result = 0;
     uint64_t k = 0;
