@@ -1177,21 +1177,21 @@ extern "C" {
                         "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
                 return Py_BuildValue("O",Py_False);
             }
-            if (strcmp(op, "="))
+            if (0 == strcmp(op, "="))
                 opID = LocalArray::OPID_ASSIGN;
-            else if (strcmp(op, "+") || strcmp(op, "+="))
+            else if (0 == strcmp(op, "+") || 0 == strcmp(op, "+="))
                 opID = LocalArray::OPID_ADD;
-            else if (strcmp(op, "*") || strcmp(op, "*="))
+            else if (0 == strcmp(op, "*") || 0 == strcmp(op, "*="))
                 opID = LocalArray::OPID_MUL;
-            else if (strcmp(op, "&") || strcmp(op, "&="))
+            else if (0 == strcmp(op, "&") || 0 == strcmp(op, "&="))
                 opID = LocalArray::OPID_AND;
-            else if (strcmp(op, "|") || strcmp(op, "|="))
+            else if (0 == strcmp(op, "|") || 0 == strcmp(op, "|="))
                 opID = LocalArray::OPID_OR;
-            else if (strcmp(op, "^") || strcmp(op, "^="))
+            else if (0 == strcmp(op, "^") || 0 == strcmp(op, "^="))
                 opID = LocalArray::OPID_XOR;
-            else if (strcmp(op, "min") || strcmp(op, "min="))
+            else if (0 == strcmp(op, "min") || 0 == strcmp(op, "min="))
                 opID = LocalArray::OPID_MIN;
-            else if (strcmp(op, "max") || strcmp(op, "max="))
+            else if (0 == strcmp(op, "max") || 0 == strcmp(op, "max="))
                 opID = LocalArray::OPID_MAX;
             else {
                 bsp_typeError("unrecognized op for bsp.requestFrom("
