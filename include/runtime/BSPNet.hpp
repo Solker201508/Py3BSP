@@ -81,6 +81,9 @@ namespace BSP {
         /// @return the rank of current process
         uint64_t getProcessRank();
 
+	/// @brief probe
+	uint64_t probe();
+
         /// @brief abort all processes
         void abort();
 

@@ -865,6 +865,41 @@ uint32_t APHash(const char *str)
     return (hash & 0x7FFFFFFF);
 }
 
+uint64_t Runtime::detect(const char *tag) {
+    uint64_t result = _nProcs;
+    for (uint64_t procID = 0; procID < _nProcs; ++ procID) {
+	if (_nOutgoingRequestsAndUpdates[procID] > 0 || _outgoingUserArrayNames[procID].str() != "") {
+	    if (result != _nProcs)
+		throw EInvalidAsync(tag, result, procID);
+	    else
+		result = procID;
+	}
+    }
+    if (result == _nProcs) {
+	result = _nal.probe();
+    }
+    return result;
+}
+
+uint64_t Runtime::exchange(const char *tag) {
+    uint64_t procID = detect(tag);
+    exchange(procID, tag);
+    return procID;
+}
+
+void Runtime::exchange(uint64_t procID, const char *tag) {
+    bool *matrixOfSendTo = new bool[_nProcs * _nProcs];
+    unsigned int k = 0;
+    for (unsigned int i = 0; i < _nProcs; ++ i) {
+	for (unsigned int j = 0; j < _nProcs; ++ j) {
+	    bool needToSend = (i == _myProcID && j == procID) || (i == procID && j == _myProcID);
+	    matrixOfSendTo[k ++] = needToSend;
+	}
+    }
+    exchange(matrixOfSendTo, tag);
+    delete[] matrixOfSendTo;
+}
+
 void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
     uint32_t hashTag1 = BKDRHash(tag);
     uint32_t hashTag2 = APHash(tag);

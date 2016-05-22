@@ -345,3 +345,14 @@ const char *EUnmatchedSync::what() const throw () {
     return _errorString;
 }
 
+char EInvalidAsync::_errorString[1024];
+EInvalidAsync::EInvalidAsync(const char *myTag, uint64_t procID1, uint64_t procID2)
+{
+    sprintf(_errorString, "[ERROR] Invalid async with more than one partners: myTag = %s, procID of partner 1 = %u, procID of partner 2 = %u",
+	    myTag, (unsigned)procID1, (unsigned)procID2);
+}
+
+const char *EInvalidAsync::what() const throw () {
+    return _errorString;
+}
+

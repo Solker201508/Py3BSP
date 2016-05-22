@@ -262,6 +262,14 @@ namespace BSP {
         virtual const char *what() const throw ();
     };
 
+    class EInvalidAsync : public std::exception {
+    private:
+        static char _errorString[1024];
+    public:
+        EInvalidAsync(const char *myTag, uint64_t procID1, uint64_t procID2);
+        virtual const char *what() const throw ();
+    };
+
 } // namespace BSP
 
 #endif /* BSPEXCEPTION_HPP_ */

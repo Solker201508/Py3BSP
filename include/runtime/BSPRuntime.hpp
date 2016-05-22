@@ -166,6 +166,12 @@ namespace BSP {
         /// @brief perform the data exchange
         void exchange(bool *MatrixOfSendTo, const char *tag);
 
+	/// @brief perform the data exchange with a single partner
+	void exchange(uint64_t procID, const char *tag);
+
+	/// @brief perfrom the data exchange with a single detected partner
+	uint64_t exchange(const char *tag);
+
         /// @brief remove "this." from path string
         std::string simplifyPath(std::string path);
 
@@ -238,6 +244,9 @@ namespace BSP {
         void exchangeWith(uint64_t partnerRank) {
             _nal.exchangeDataBlocksWith(partnerRank);
         }
+
+	/// @brief detect a single partner
+	uint64_t detect(const char *tag);
 
         /// @brief get object by path
         NamedObject *getObjectByPath(std::string path);

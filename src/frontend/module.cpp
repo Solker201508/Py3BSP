@@ -1177,21 +1177,21 @@ extern "C" {
                         "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
                 return Py_BuildValue("O",Py_False);
             }
-            if (strcmp(op, "="))
+            if (0 == strcmp(op, "="))
                 opID = LocalArray::OPID_ASSIGN;
-            else if (strcmp(op, "+") || strcmp(op, "+="))
+            else if (0 == strcmp(op, "+") || 0 == strcmp(op, "+="))
                 opID = LocalArray::OPID_ADD;
-            else if (strcmp(op, "*") || strcmp(op, "*="))
+            else if (0 == strcmp(op, "*") || 0 == strcmp(op, "*="))
                 opID = LocalArray::OPID_MUL;
-            else if (strcmp(op, "&") || strcmp(op, "&="))
+            else if (0 == strcmp(op, "&") || 0 == strcmp(op, "&="))
                 opID = LocalArray::OPID_AND;
-            else if (strcmp(op, "|") || strcmp(op, "|="))
+            else if (0 == strcmp(op, "|") || 0 == strcmp(op, "|="))
                 opID = LocalArray::OPID_OR;
-            else if (strcmp(op, "^") || strcmp(op, "^="))
+            else if (0 == strcmp(op, "^") || 0 == strcmp(op, "^="))
                 opID = LocalArray::OPID_XOR;
-            else if (strcmp(op, "min") || strcmp(op, "min="))
+            else if (0 == strcmp(op, "min") || 0 == strcmp(op, "min="))
                 opID = LocalArray::OPID_MIN;
-            else if (strcmp(op, "max") || strcmp(op, "max="))
+            else if (0 == strcmp(op, "max") || 0 == strcmp(op, "max="))
                 opID = LocalArray::OPID_MAX;
             else {
                 bsp_typeError("unrecognized op for bsp.requestFrom("
@@ -1375,6 +1375,52 @@ extern "C" {
         return Py_BuildValue("O",Py_True);
     }
 
+    // procID = bsp.async(tag)
+    static PyObject *bsp_async(PyObject *self, PyObject *args) {
+        char *tag = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.async", &tag);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.async(tag)");
+            return Py_BuildValue("i",-1);
+        }
+	uint64_t procID = 0;
+        try {
+	    procID = runtime_->exchange(tag);
+
+            // update the fromProc lists
+            for (uint64_t iProc = 0; iProc < nProcs_; ++iProc) {
+                // clear the fromProc list
+                PyObject *key, *value;
+                Py_ssize_t pos = 0;
+                while (PyDict_Next(fromProc_[iProc],&pos,&key,&value)){
+                    Py_XDECREF(value);
+                }
+                PyDict_Clear(fromProc_[iProc]);
+
+                // found all local arrays in the import path
+                std::stringstream ss;
+                ss << "_import.procID" << iProc;
+                std::string pathImport = ss.str();
+                if (runtime_->hasObject(pathImport)) {
+                    NamedObject *nobjPath = runtime_->getObject(pathImport);
+                    NameSpace *nspPath = nobjPath->_namespace();
+                    for (NameSpaceIterator iter = nspPath->begin(); iter != nspPath->end(); ++iter)
+                        bsp_extractImported(iter->second,"",fromProc_[iProc]);
+                }
+            }
+            
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+            return Py_BuildValue("i",-1);
+        }
+        return Py_BuildValue("i",(int)procID);
+    }
+
+    static PyObject *bsp_toggleVerbose(PyObject *self, PyObject *args) {
+	runtime_->setVerbose(!runtime_->isVerbose());
+	Py_RETURN_NONE;
+    }
+
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
         {"procCount",bsp_procCount,METH_VARARGS,"get the number of processes"},
@@ -1402,6 +1448,8 @@ extern "C" {
         {"requestTo",bsp_requestTo,METH_VARARGS,"request data from a share/global array to a local array"},
         {"updateFrom",bsp_updateFrom,METH_VARARGS,"update data from a local array to a share/global array"},
         {"sync",bsp_sync,METH_VARARGS,"sync data with optional send-matrix"},
+	{"async", bsp_async, METH_VARARGS,"asynchronization"},
+	{"toggleVerbose", bsp_toggleVerbose, METH_VARARGS, "toggle verbose"},
         {NULL,NULL,0,NULL}
     };
 

@@ -244,3 +244,9 @@ void Net::jointGather(void* dataOut, void* dataIn, uint64_t lengthPerProc,
     MPI_Comm_free(&newComm);
     delete[] ranksInGroup;
 }
+
+uint64_t Net::probe() {
+    MPI_Status status;
+    MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, _communicator, &status);
+    return (uint64_t)status.MPI_SOURCE;
+}
