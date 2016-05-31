@@ -32,8 +32,35 @@ namespace BSP {
     class Message;
     class Program;
     enum Type;
-    /// @brief the main class of C$ runtime library
 
+    class ASyncScheduler {
+        private:
+            uint64_t _iter, _nPassengers, _minPlanSize, _maxPlanSize, _nPlans;
+            uint64_t *_deadline;
+            uint64_t *_ticket;
+            uint64_t *_buffer;
+            uint64_t **_plan;
+            bool *_arrived;
+        protected:
+            void finalize();
+            bool reschedule(uint64_t i);
+        public:
+            ASyncScheduler(uint64_t nPassengers);
+            ASyncScheduler(uint64_t nPassengers, uint64_t nPlans);
+            ASyncScheduler(uint64_t nPassengers, uint64_t nPlans, uint64_t minPlanSize, uint64_t maxPlanSize);
+            ~ASyncScheduler();
+            void init(uint64_t nPassengers, uint64_t nPlans);
+            void init(uint64_t nPassengers, uint64_t nPlans, uint64_t minPlanSize, uint64_t maxPlanSize);
+            void receive(uint64_t i);
+            bool ready();
+            bool complete();
+            void iterate();
+            inline uint64_t sizeOfManifest() { return _plan[0][_maxPlanSize]; }
+            inline uint64_t itemOfManifest(uint64_t j) { return _plan[0][j]; }
+            inline uint64_t ticketOf(uint64_t j) { return _ticket[j]; }
+    };
+
+    /// @brief the main class of C$ runtime library
     class Runtime {
         friend class ArrayRegistration;
     private:
@@ -55,6 +82,11 @@ namespace BSP {
         std::map<GlobalRequest *, LocalArray *> _replyReceivers;
         std::stringstream *_incomingUserArrayNames; // reserved for later use
         std::stringstream *_outgoingUserArrayNames;
+        std::map<uint64_t, uint64_t> _workerID;
+        std::vector<uint64_t> _workerProc;
+        std::vector<uint64_t> _manifest;
+        ASyncScheduler *_scheduler;
+        bool _scheduling;
         static Runtime *_activeRuntimeObject;
         bool _verbose;
         bool _finalizing;
@@ -132,6 +164,13 @@ namespace BSP {
             return &_nal;
         }
 
+
+        /// @brief get the size of the manifest
+        inline uint64_t sizeOfManifest() { return _manifest.size(); }
+
+        /// @brief get one item of the manifest
+        inline uint64_t itemOfManifest(uint64_t j) { return _manifest[j]; }
+
         /// @brief abort
         void abort();
 
@@ -169,8 +208,8 @@ namespace BSP {
 	/// @brief perform the data exchange with a single partner
 	void exchange(uint64_t procID, const char *tag);
 
-	/// @brief perfrom the data exchange with a single detected partner
-	uint64_t exchange(const char *tag);
+	/// @brief perfrom the data exchange with detected partners
+	uint64_t exchange(const char *tag, bool stoppingScheduler);
 
         /// @brief remove "this." from path string
         std::string simplifyPath(std::string path);
@@ -196,6 +235,9 @@ namespace BSP {
         /// @brief clear imported objects
         void clearImported();
 
+        /// @brief clear imported objects
+        void clearImported(uint64_t procID);
+
         /// @brief check whether object exists
         bool hasObject(std::string path);
 
@@ -220,6 +262,21 @@ namespace BSP {
 
         /// @brief create string from 1d local array
         std::string toString(std::string path);
+
+        /// @brief add worker
+        void addWorker(uint64_t procID);
+
+        /// @brief set scheduler for asynchronization
+        void setScheduler(uint64_t boundOfDelay, uint64_t smallestBatch, uint64_t largestBatch);
+
+        /// @brief unset scheduler and use default asynchronization
+        void unsetScheduler();
+
+        /// @brief enable scheduler
+        void enableScheduler();
+
+        /// @brief disable scheduler
+        void disableScheduler();
 
     protected:
         /// @brief send data

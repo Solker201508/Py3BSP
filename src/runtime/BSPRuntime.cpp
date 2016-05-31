@@ -33,6 +33,214 @@
 using namespace BSP;
 Runtime *Runtime::_activeRuntimeObject = NULL;
 
+ASyncScheduler::ASyncScheduler(uint64_t nPassengers) {
+    _nPassengers = 0;
+    init(nPassengers, 1);
+}
+
+ASyncScheduler::ASyncScheduler(uint64_t nPassengers, uint64_t nPlans) {
+    _nPassengers = 0;
+    init(nPassengers, nPlans);
+}
+
+ASyncScheduler::ASyncScheduler(uint64_t nPassengers, uint64_t nPlans, uint64_t minPlanSize, uint64_t maxPlanSize) {
+    _nPassengers = 0;
+    init(nPassengers, nPlans, minPlanSize, maxPlanSize);
+}
+
+ASyncScheduler::~ASyncScheduler() {
+    finalize();
+}
+
+void ASyncScheduler::finalize() {
+    if (_nPassengers == 0)
+        return;
+    delete []_deadline;
+    delete []_ticket;
+    delete []_buffer;
+    delete []_plan;
+    delete []_arrived;
+    _nPassengers = 0;
+}
+
+void ASyncScheduler::init(uint64_t nPassengers, uint64_t nPlans) {
+    assert(nPassengers > 0);
+    assert(nPlans > 0);
+    if (nPlans > nPassengers)
+        nPlans = nPassengers;
+    init(nPassengers, nPlans, (nPassengers + nPlans - 1) / nPlans, (4 * nPassengers + nPlans - 1) / nPlans);
+}
+
+void ASyncScheduler::init(uint64_t nPassengers, uint64_t nPlans, uint64_t minPlanSize, uint64_t maxPlanSize) {
+    assert(nPassengers > 0);
+    assert(nPlans > 0);
+    assert(minPlanSize > 0);
+    assert(minPlanSize <= maxPlanSize);
+    if (nPlans > nPassengers)
+        nPlans = nPassengers;
+    if (minPlanSize > nPassengers)
+        minPlanSize = nPassengers;
+    if (maxPlanSize > nPassengers)
+        maxPlanSize = nPassengers;
+
+    finalize();
+    _nPassengers = nPassengers;
+    _nPlans = nPlans;
+    _minPlanSize = minPlanSize;
+    _maxPlanSize = maxPlanSize;
+    _deadline = new uint64_t[_nPassengers];
+    _ticket = new uint64_t[_nPassengers];
+    _arrived = new bool[_nPassengers];
+    _buffer = new uint64_t[(_maxPlanSize + 1) * _nPlans];
+    _plan = new uint64_t *[_nPlans];
+    for (uint64_t iPlan = 0; iPlan < _nPlans; ++ iPlan) {
+        _plan[iPlan] = &_buffer[iPlan * (_maxPlanSize + 1)];
+        _plan[iPlan][_maxPlanSize] = 0;
+    }
+    for (uint64_t i = 0; i < _nPassengers; ++ i) {
+        _arrived[i] = false;
+        _deadline[i] = _nPlans - 1;
+        _ticket[i] = _deadline[i] - i / _maxPlanSize;
+        _plan[_ticket[i]][_plan[_ticket[i]][_maxPlanSize] ++] = i;
+    }
+    _iter = 0;
+}
+
+bool ASyncScheduler::reschedule(uint64_t i) {
+    assert(i < _nPassengers);
+    assert(!_arrived[i]);
+    assert(_ticket[i] == _iter);
+    assert(_deadline[i] > _iter);
+    uint64_t bestK = _deadline[i] - _iter;
+    for (uint64_t k = bestK; k > 0; -- k) {
+        uint64_t j = _plan[k][_maxPlanSize];
+        if (j >= _maxPlanSize)
+            continue;
+        _plan[k][j] = i;
+        _plan[k][_maxPlanSize] = j + 1;
+        _ticket[i] = _iter + k;
+
+        uint64_t nInFlight = _plan[0][_maxPlanSize];
+        for (j = 0; j < nInFlight; ++ j) {
+            if (_plan[0][j] == i) {
+                _plan[0][j] = _plan[0][nInFlight - 1];
+                break;
+            }
+        }
+        _plan[0][_maxPlanSize] = nInFlight - 1;
+        //std::cout << i << " has been rescheduled to iter " << _ticket[i] << std::endl;
+        return true;
+    }
+    return false;
+}
+
+void ASyncScheduler::receive(uint64_t i) {
+    assert(i < _nPassengers);
+    _arrived[i] = true;
+    if (_deadline[i] != _iter) {
+        uint64_t currK = _ticket[i] - _iter;
+        for (uint64_t k = 0; k < currK; ++ k) {
+            uint64_t nInPlan = _plan[k][_maxPlanSize];
+            bool swapped = false;
+            for (uint64_t j = 0; j < nInPlan; ++ j) {
+                uint64_t l = _plan[k][j];
+                if (!_arrived[l] && _deadline[l] >= _ticket[i]) {
+                    uint64_t nInMyPlan = _plan[currK][_maxPlanSize];
+                    for (uint64_t myJ = 0; myJ < nInMyPlan; ++ myJ) {
+                        if (_plan[currK][myJ] == i) {
+                            _plan[currK][myJ] = l;
+                            _ticket[l] = _ticket[i];
+                            _plan[k][j] = i;
+                            _ticket[i] = _iter + k;
+                            swapped = true;
+                            break;
+                        }
+                    }
+                    assert(swapped);
+                    break;
+                }
+            }
+            if (swapped)
+                break;
+            if (nInPlan >= _maxPlanSize) 
+                continue;
+            _plan[k][nInPlan ++] = i;
+            _plan[k][_maxPlanSize] = nInPlan;
+            _ticket[i] = _iter + k;
+            //std::cout << i << " has been scheduled to iter " << _ticket[i] << ", k = " << k << ", currIter = " << _iter << std::endl;
+            uint64_t nInMyPlan = _plan[currK][_maxPlanSize];
+            for (uint64_t myJ = 0; myJ < nInMyPlan; ++ myJ) {
+                if (_plan[currK][myJ] == i) {
+                    _plan[currK][myJ] = _plan[currK][nInMyPlan - 1];
+                    _plan[currK][_maxPlanSize] = nInMyPlan - 1;
+                    swapped = true;
+                    break;
+                }
+            }
+            assert(swapped);
+            break;
+        }
+    }
+}
+
+bool ASyncScheduler::ready() {
+    uint64_t *flight = _plan[0];
+    uint64_t nInFlight = flight[_maxPlanSize];
+    if (nInFlight < _minPlanSize)
+        return false;
+    for (uint64_t j = 0; j < nInFlight; ++ j) {
+        uint64_t i = flight[j];
+        if (!_arrived[i]) {
+            while (_deadline[i] > _iter) {
+                if (!reschedule(i)) {
+                    flight[j] = flight[0];
+                    flight[0] = i;
+                    return false;
+                }
+                nInFlight = flight[_maxPlanSize];
+                if (nInFlight <= j)
+                    return nInFlight >= _minPlanSize;
+                i = flight[j];
+                if (_arrived[i])
+                    break;
+            }
+            if (_arrived[i])
+                continue;
+            flight[j] = flight[0];
+            flight[0] = i;
+            return false;
+        }
+    }
+    if (nInFlight < _minPlanSize)
+        return false;
+    return true;
+}
+
+bool ASyncScheduler::complete() {
+    for (uint64_t i = 0; i < _nPassengers; ++ i) {
+        if (!_arrived[i]) {
+            //std::cout << i << " have not arrived " << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+void ASyncScheduler::iterate() {
+    uint64_t *flight = _plan[0];
+    for (uint64_t iPlan = 0; iPlan < _nPlans - 1; ++ iPlan) {
+        _plan[iPlan] = _plan[iPlan + 1];
+    }
+    _plan[_nPlans - 1] = flight;
+    ++ _iter;
+    uint64_t nInFlight = flight[_maxPlanSize];
+    for (uint64_t j = 0; j < nInFlight; ++ j) {
+        uint64_t i = flight[j];
+        _deadline[i] = _iter + _nPlans - 1;
+        _ticket[i] = _iter + _nPlans - 1;
+        _arrived[i] = false;
+    }
+}
 
 /// @brief constructor
 /// @param pArgc the pointer to argc of main()
@@ -47,6 +255,8 @@ _nal.getNumberOfProcesses()) {
     _verbose = false;
     _nProcs = _nal.getNumberOfProcesses();
     _myProcID = _nal.getProcessRank();
+    _scheduler = NULL;
+    _scheduling = false;
 
     _registration = NULL;
     _nOutgoingRequestsAndUpdates = new uint64_t[_nProcs];
@@ -74,15 +284,18 @@ _nal.getNumberOfProcesses()) {
 
 Runtime::~Runtime() {
     _finalizing = true;
-    _nal.finalize();
     _this.clear();
     _activeRuntimeObject = NULL;
+    if (_scheduler)
+        delete _scheduler;
     delete[] _nOutgoingRequestsAndUpdates;
     delete[] _nIncomingReplies;
     delete[] _outgoingUserDefinedMessages;
     delete[] _incomingUserDefinedMessages;
     delete[] _incomingUserArrayNames;
     delete[] _outgoingUserArrayNames;
+    _nal.finalize();
+    //_nal.abort();
 }
 
 void Runtime::abort() {
@@ -869,9 +1082,11 @@ uint64_t Runtime::detect(const char *tag) {
     uint64_t result = _nProcs;
     for (uint64_t procID = 0; procID < _nProcs; ++ procID) {
 	if (_nOutgoingRequestsAndUpdates[procID] > 0 || _outgoingUserArrayNames[procID].str() != "") {
-	    if (result != _nProcs)
+	    if (result != _nProcs && result != _myProcID)
 		throw EInvalidAsync(tag, result, procID);
-	    else
+	    else if (_scheduling && _scheduler && _workerID.find(procID) != _workerID.end())
+                result = _myProcID;
+            else
 		result = procID;
 	}
     }
@@ -881,20 +1096,62 @@ uint64_t Runtime::detect(const char *tag) {
     return result;
 }
 
-uint64_t Runtime::exchange(const char *tag) {
-    uint64_t procID = detect(tag);
-    exchange(procID, tag);
-    return procID;
+uint64_t Runtime::exchange(const char *tag, bool stoppingScheduler) {
+    if (_scheduler && _scheduling) {
+        _manifest.clear();
+        for (;;) {
+            uint64_t procID = detect(tag);
+            if (_verbose) {
+                std::cout << _myProcID << ": detected proc " << procID << " for exchange" << std::endl;
+            }
+            exchange(procID, tag);
+            if (procID != _myProcID) {
+                if (_workerID.find(procID) != _workerID.end()) {
+                    _scheduler->receive(_workerID[procID]);
+                    //std::cout << _workerID[procID] << " have arrived " << std::endl;
+                    if (stoppingScheduler) {
+                        if (_scheduler->complete())
+                            break;
+                    } else if (_scheduler->ready())
+                        break;
+                }
+            } else
+                return _myProcID;
+        }
+        uint64_t nPassengers = _scheduler->sizeOfManifest();
+        if (stoppingScheduler) {
+            _manifest = _workerProc;
+        } else {
+            for (uint64_t i = 0; i < nPassengers; ++ i)
+                _manifest.push_back(_workerProc[_scheduler->itemOfManifest(i)]);
+            _scheduler->iterate();
+        }
+        return _myProcID;
+    } else {
+        uint64_t procID = detect(tag);
+        exchange(procID, tag);
+        return procID;
+    }
 }
 
 void Runtime::exchange(uint64_t procID, const char *tag) {
     bool *matrixOfSendTo = new bool[_nProcs * _nProcs];
     unsigned int k = 0;
-    for (unsigned int i = 0; i < _nProcs; ++ i) {
-	for (unsigned int j = 0; j < _nProcs; ++ j) {
-	    bool needToSend = (i == _myProcID && j == procID) || (i == procID && j == _myProcID);
-	    matrixOfSendTo[k ++] = needToSend;
-	}
+    if (procID == _myProcID && _scheduling) {
+        for (unsigned int i = 0; i < _nProcs; ++ i) {
+            for (unsigned int j = 0; j < _nProcs; ++ j) {
+                bool needToSend = (i == _myProcID && _workerID.find(j) != _workerID.end()) 
+                    && (_nOutgoingRequestsAndUpdates[j] > 0 || _outgoingUserArrayNames[j].str() != "");
+                matrixOfSendTo[k ++] = needToSend;
+            }
+        }
+    } else {
+        for (unsigned int i = 0; i < _nProcs; ++ i) {
+            for (unsigned int j = 0; j < _nProcs; ++ j) {
+                bool needToSend = (i == _myProcID && j == procID) || (i == procID && j == _myProcID);
+                matrixOfSendTo[k ++] = needToSend;
+            }
+        }
     }
     exchange(matrixOfSendTo, tag);
     delete[] matrixOfSendTo;
@@ -916,9 +1173,11 @@ void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
     }
 
     // clear imported
-    clearImported();
-    if (_verbose) {
-        std::cout << "imported cleared" << std::endl;
+    if (!_scheduling) {
+        clearImported();
+        if (_verbose) {
+            std::cout << "imported cleared" << std::endl;
+        }
     }
 
     // serialize export
@@ -939,6 +1198,14 @@ void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
             continue;
         if (!myConnect[partnerID])
             continue;
+
+        // clear imported from this proc
+        if (_scheduling) {
+            clearImported(partnerID);
+            if (_verbose) {
+                std::cout << "imported from " << partnerID << " cleared" << std::endl;
+            }
+        }
 
         // exchange message count
         if (_verbose) {
@@ -965,7 +1232,7 @@ void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
 
         // report error if the passwords dont match
         if (partnerCountAndPass[1] != myCountAndPass[1]) {
-            throw EUnmatchedSync(tag,myCountAndPass[1],partnerCountAndPass[1]);
+            throw EUnmatchedSync(partnerID, tag,myCountAndPass[1],partnerCountAndPass[1]);
         }
 
         // skip empty request partners
@@ -1225,11 +1492,15 @@ void Runtime::clearPath(std::string path) {
 
 void Runtime::clearImported() {
     for (uint64_t procID = 0; procID < _nProcs; procID++) {
-
-        std::stringstream procSS;
-        procSS << "_import.procID" << procID;
-        clearPath(procSS.str());
+        clearImported(procID);
     }
+}
+
+/// @brief clear imported objects
+void Runtime::clearImported(uint64_t procID) {
+    std::stringstream procSS;
+    procSS << "_import.procID" << procID;
+    clearPath(procSS.str());
 }
 
 bool Runtime::hasObject(std::string path) {
@@ -1926,3 +2197,49 @@ std::string Runtime::toString(std::string path) {
     return retval;
 }
 
+void Runtime::setScheduler(uint64_t boundOfDelay, uint64_t smallestBatch, uint64_t largestBatch) {
+    if (_workerProc.size() == 0)
+        throw EInvalidArgument();
+    if (_scheduler)
+        delete _scheduler;
+    if (smallestBatch == 0) {
+        smallestBatch = (_workerProc.size() + boundOfDelay - 1) / boundOfDelay;
+        largestBatch = (3 * _workerProc.size() + boundOfDelay - 1) / boundOfDelay;
+        if (largestBatch > _workerProc.size())
+            largestBatch = _workerProc.size();
+    } else if (largestBatch == 0) {
+        largestBatch = 3 * smallestBatch;
+        if (largestBatch > _workerProc.size())
+            largestBatch = _workerProc.size();
+    }
+    _scheduler = new ASyncScheduler(_workerProc.size(), boundOfDelay, smallestBatch, largestBatch);
+    _scheduling = true;
+}
+
+void Runtime::unsetScheduler() {
+    if (_scheduler)
+        delete _scheduler;
+    _scheduler = NULL;
+    _scheduling = false;
+    _workerID.clear();
+    _workerProc.clear();
+}
+
+void Runtime::enableScheduler() {
+    _scheduling = true;
+}
+
+void Runtime::disableScheduler() {
+    _scheduling = false;
+}
+
+void Runtime::addWorker(uint64_t procID) {
+    if (procID >= _nProcs || procID == _myProcID)
+        throw EInvalidArgument();
+    if (_workerID.find(procID) != _workerID.end())
+        return;
+    if (_scheduler)
+        throw EInvalidArgument();
+    _workerID[procID] = _workerProc.size();
+    _workerProc.push_back(procID);
+}

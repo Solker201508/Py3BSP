@@ -258,7 +258,7 @@ namespace BSP {
     private:
         static char _errorString[1024];
     public:
-        EUnmatchedSync(const char *myTag, uint64_t myHash, uint64_t partnerHash);
+        EUnmatchedSync(const uint64_t partnerID, const char *myTag, uint64_t myHash, uint64_t partnerHash);
         virtual const char *what() const throw ();
     };
 

@@ -23,7 +23,7 @@ Runtime *runtime_ = NULL;
 
 std::string bsp_getScriptPos() {
     std::stringstream ss;
-    ss << "------ call stack begin ------ " << std::endl;
+    ss << runtime_->getMyProcessID() << ": ------ call stack begin ------ " << std::endl;
     PyObject *param = Py_BuildValue("()");
     PyObject *stack = PyObject_CallObject(traceback_extractStack_,param);
     Py_DECREF(param);
@@ -44,18 +44,18 @@ std::string bsp_getScriptPos() {
                 << ">>> " << lineText << std::endl;
         }
     }
-    ss << "------  call stack end  ------ " << std::endl;
+    ss << runtime_->getMyProcessID() << ": ------  call stack end  ------ " << std::endl;
     return ss.str();
 }
 
 void bsp_typeError(std::string strErr) {
-    PyErr_SetString(PyExc_TypeError, (strErr + "\n" + bsp_getScriptPos()).c_str());
-    PyErr_Print();
+    std::cerr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl
+        << bsp_getScriptPos();
 }
 
 void bsp_runtimeError(std::string strErr) {
-    PyErr_SetString(PyExc_RuntimeError, (strErr + "\n" + bsp_getScriptPos()).c_str());
-    PyErr_Print();
+    std::cerr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl
+        << bsp_getScriptPos();
 }
 
 extern "C" {
@@ -1375,17 +1375,23 @@ extern "C" {
         return Py_BuildValue("O",Py_True);
     }
 
-    // procID = bsp.async(tag)
+    // {partnerID1, ..., partnerIDk} = bsp.async(tag, optionalStopping)
     static PyObject *bsp_async(PyObject *self, PyObject *args) {
         char *tag = NULL;
-        int ok = PyArg_ParseTuple(args, "s:bsp.async", &tag);
+        PyObject *option = NULL;
+        bool stopping = false;
+        int ok = PyArg_ParseTuple(args, "s|O:bsp.async", &tag, &option);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.async(tag)");
-            return Py_BuildValue("i",-1);
+            Py_RETURN_NONE;
+        }
+        if (option) {
+            if (PyObject_IsTrue(option))
+                stopping = true;
         }
 	uint64_t procID = 0;
         try {
-	    procID = runtime_->exchange(tag);
+	    procID = runtime_->exchange(tag, stopping);
 
             // update the fromProc lists
             for (uint64_t iProc = 0; iProc < nProcs_; ++iProc) {
@@ -1411,11 +1417,82 @@ extern "C" {
             
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("i",-1);
+            Py_RETURN_NONE;
         }
-        return Py_BuildValue("i",(int)procID);
+        PyObject *result = PySet_New(NULL);
+        //Py_XINCREF(result);
+        if (procID == runtime_->getMyProcessID()) {
+            uint64_t n = runtime_->sizeOfManifest();
+            for (uint64_t i = 0; i < n; ++ i)
+                PySet_Add(result, Py_BuildValue("I", (unsigned int)runtime_->itemOfManifest(i)));
+        } else
+            PySet_Add(result, Py_BuildValue("I", (unsigned int)procID));
+        return result;
     }
 
+    // bsp.addWorker(procID)
+    static PyObject *bsp_addWorker(PyObject *self, PyObject *args) {
+        unsigned int procID = runtime_->getMyProcessID();
+        int ok = PyArg_ParseTuple(args, "I:bsp.addWorker", &procID);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.addWorker(procID)");
+            Py_RETURN_NONE;
+        }
+        try {
+            runtime_->addWorker(procID);
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    // bsp.setScheduler(boundOfDelay, smallestBatch, largestBatch)
+    static PyObject *bsp_setScheduler(PyObject *self, PyObject *args) {
+        unsigned int boundOfDelay = 0, smallestBatch = 0, largestBatch = 0;
+        int ok = PyArg_ParseTuple(args, "I|II:bsp.setScheduler", &boundOfDelay, &smallestBatch, &largestBatch);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.setScheduler(boundOfDelay, smallestBatch, largestBatch)");
+            Py_RETURN_NONE;
+        }
+        try {
+            runtime_->setScheduler(boundOfDelay, smallestBatch, largestBatch);
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    // bsp.unsetScheduler()
+    static PyObject *bsp_unsetScheduler(PyObject *self, PyObject *args) {
+        try {
+            runtime_->unsetScheduler();
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    // bsp.enableScheduler()
+    static PyObject *bsp_enableScheduler(PyObject *self, PyObject *args) {
+        try {
+            runtime_->enableScheduler();
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    // bsp.disableScheduler()
+    static PyObject *bsp_disableScheduler(PyObject *self, PyObject *args) {
+        try {
+            runtime_->disableScheduler();
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    // bsp.toggleVerbose()
     static PyObject *bsp_toggleVerbose(PyObject *self, PyObject *args) {
 	runtime_->setVerbose(!runtime_->isVerbose());
 	Py_RETURN_NONE;
@@ -1449,6 +1526,11 @@ extern "C" {
         {"updateFrom",bsp_updateFrom,METH_VARARGS,"update data from a local array to a share/global array"},
         {"sync",bsp_sync,METH_VARARGS,"sync data with optional send-matrix"},
 	{"async", bsp_async, METH_VARARGS,"asynchronization"},
+        {"addWorker", bsp_addWorker, METH_VARARGS, "add a worker for asynchronization"},
+        {"setScheduler", bsp_setScheduler, METH_VARARGS,"set a scheduler for asynchronization"},
+        {"unsetScheduler", bsp_unsetScheduler, METH_VARARGS, "unset the scheduler for asynchronization"},
+        {"enableScheduler", bsp_enableScheduler, METH_VARARGS, "enable the scheduler for asynchronization"},
+        {"disableScheduler", bsp_disableScheduler, METH_VARARGS, "disable the scheduler for asynchronization"},
 	{"toggleVerbose", bsp_toggleVerbose, METH_VARARGS, "toggle verbose"},
         {NULL,NULL,0,NULL}
     };

@@ -335,10 +335,11 @@ const char *ELocalToGlobalAssignment::what() const throw () {
 }
 
 char EUnmatchedSync::_errorString[1024];
-EUnmatchedSync::EUnmatchedSync(const char *myTag, uint64_t myHash, uint64_t partnerHash)
+EUnmatchedSync::EUnmatchedSync(const uint64_t partnerID, const char *myTag, uint64_t myHash, uint64_t partnerHash)
 {
-    sprintf(_errorString, "[ERROR] Unmatched sync: myTag = %s, myHash1 = %u, myHash2 = %u, partnerHash1 = %u, partnerHash2 = %u",
-	    myTag, (unsigned)(myHash & 0xffffffff), (unsigned)((myHash >> 32)&0xffffffff), (unsigned)(partnerHash & 0xffffffff), (unsigned)((partnerHash >> 32)&0xffffffff));
+    sprintf(_errorString, "[ERROR] Unmatched sync: partnerID = %u, myTag = %s, myHash1 = %u, myHash2 = %u, partnerHash1 = %u, partnerHash2 = %u", 
+            (unsigned) partnerID, myTag, (unsigned)(myHash & 0xffffffff), (unsigned)((myHash >> 32)&0xffffffff), 
+            (unsigned)(partnerHash & 0xffffffff), (unsigned)((partnerHash >> 32)&0xffffffff));
 }
 
 const char *EUnmatchedSync::what() const throw () {
