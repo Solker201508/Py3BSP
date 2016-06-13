@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <cassert>
 #include "BSPNamedObject.hpp"
 #include "BSPMessage.hpp"
 #include "BSPGlobalArray.hpp"
@@ -219,9 +220,18 @@ bool ASyncScheduler::ready() {
 bool ASyncScheduler::complete() {
     for (uint64_t i = 0; i < _nPassengers; ++ i) {
         if (!_arrived[i]) {
-            //std::cout << i << " have not arrived " << std::endl;
             return false;
         }
+    }
+    ++ _iter;
+    for (uint64_t iPlan = 0; iPlan < _nPlans; ++ iPlan) {
+        _plan[iPlan][_maxPlanSize] = 0;
+    }
+    for (uint64_t i = 0; i < _nPassengers; ++ i) {
+        _arrived[i] = false;
+        _deadline[i] = _iter + _nPlans - 1;
+        _ticket[i] = _deadline[i] - i / _maxPlanSize;
+        _plan[_ticket[i] - _iter][_plan[_ticket[i] - _iter][_maxPlanSize] ++] = i;
     }
     return true;
 }
@@ -591,8 +601,8 @@ void Runtime::requestTo(LocalArray& server, uint64_t serverProcID,
 
     uint64_t dataLength = request->getDataCount()
             * request->getNumberOfBytesPerElement();
-    Message * updateMessage = new Message(serverProcID, _myProcID,
-            Message::MESSAGE_DATA_REPLY, registration->getAccessID(),
+    Message * updateMessage = new Message(_myProcID, serverProcID,
+            Message::MESSAGE_DATA_UPDATE, registration->getAccessID(),
             clientID, opID, dataLength,
             client.getData(), false);
     registration->addOutgoingMessage(updateMessage);
