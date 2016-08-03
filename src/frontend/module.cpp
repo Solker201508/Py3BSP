@@ -5,12 +5,17 @@
 #include <cassert>
 #include <string>
 #include <sstream>
+#include <chrono>
 #include <map>
 
 using namespace BSP;
+using namespace BSP::Algorithm;
+using namespace std::chrono;
 PyObject *pickle_ = NULL;
+PyObject *ctypes_ = NULL;
 PyObject *pickle_dumps_ = NULL;
 PyObject *pickle_loads_ = NULL;
+PyObject *ctypes_addressof_ = NULL;
 PyObject *traceback_ = NULL;
 PyObject *traceback_extractStack_ = NULL;
 PyObject **fromProc_ = NULL;
@@ -18,6 +23,7 @@ uint64_t nProcs_ = 0;
 std::map<IndexSet *, int> indexSetToID_;
 std::map<int, IndexSet *> idToIndexSet_;
 IndexSet *activeIndexSet_ = NULL;
+high_resolution_clock::time_point tStart_, tStop_;
 
 Runtime *runtime_ = NULL;
 
@@ -69,7 +75,9 @@ extern "C" {
         activeIndexSet_ = NULL;
         Py_XDECREF(pickle_dumps_);
         Py_XDECREF(pickle_loads_);
+        Py_XDECREF(ctypes_addressof_);
         Py_XDECREF(pickle_);
+        Py_XDECREF(ctypes_);
         Py_XDECREF(traceback_extractStack_);
         Py_XDECREF(traceback_);
         for (unsigned i = 0; i < nProcs_; ++i) {
@@ -79,6 +87,8 @@ extern "C" {
         pickle_ = NULL;
         pickle_dumps_ = NULL;
         pickle_loads_ = NULL;
+        ctypes_ = NULL;
+        ctypes_addressof_ = NULL;
         fromProc_ = NULL;
         nProcs_ = 0;
         Py_Finalize();
@@ -1498,6 +1508,301 @@ extern "C" {
 	Py_RETURN_NONE;
     }
 
+    // bsp.tic()
+    static PyObject *bsp_tic(PyObject *self, PyObject *args) {
+        tStart_ = high_resolution_clock::now();
+	Py_RETURN_NONE;
+    }
+
+    // bsp.toc()
+    static PyObject *bsp_toc(PyObject *self, PyObject *args) {
+        tStop_ = high_resolution_clock::now();
+        double result = duration<double, std::milli>(tStop_ - tStart_).count();
+        return Py_BuildValue("d",result);
+    }
+
+    // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
+    static PyObject *bsp_minimize(PyObject *self, PyObject *args) {
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
+        unsigned long kMaxIter = 1000, kMLim = 20;
+        char *strPenalty = NULL, *strMethod = NULL;
+        int ok = PyArg_ParseTuple(args, "OOO|kkss: bsp.minimize", &objParam, &objFunValue, &objFunGradient,
+                &kMaxIter, &kMLim, &strPenalty, &strMethod);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_RETURN_NONE;
+        }
+        Py_XINCREF(objParam);
+        if (!PyArray_Check(objParam)) {
+            bsp_typeError("invalid params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        }
+        PyArrayObject *numpyArray = (PyArrayObject *)objParam;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        int elemSize = 0;
+        if (strides[nDims - 1] > strides[0]) {
+            elemSize = strides[0];
+        } else {
+            elemSize = strides[nDims - 1];
+        }
+        if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
+            bsp_typeError("invalid type of params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        }
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned long nParams = 1;
+        for (int iDim = 0; iDim < nDims; ++ iDim) {
+            nParams *= dimSize[iDim];
+        }
+
+        double *params = (double *)PyArray_BYTES(numpyArray);
+
+        typedef double (* FunValue)(unsigned long, double *);
+        typedef void (* FunGradient)(unsigned long, double *, double *);
+        FunValue funValue = NULL;
+        FunGradient funGradient = NULL;
+
+        try {
+            PyObject *myParam = Py_BuildValue("(O)", objFunValue);
+            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+            Py_XDECREF(myParam);
+            if (objAddress == NULL) {
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            unsigned long long uAddress = 0;
+            ok = PyArg_Parse(objAddress, "K", &uAddress);
+            if (!ok) {
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            funValue = *(FunValue *) uAddress;
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+
+        try {
+            PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
+            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+            Py_XDECREF(myParam);
+            if (objAddress == NULL) {
+                bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            unsigned long long uAddress = 0;
+            ok = PyArg_Parse(objAddress, "K", &uAddress);
+            if (!ok) {
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            funGradient = *(FunGradient *) uAddress;
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+
+        double result = 0.0;
+        if (strMethod == NULL) {
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            lbfgs.minimize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = lbfgs.param(i);
+            }
+            result = lbfgs.value();
+        } else if (0 == strcmp(strMethod, "LBFGS")) {
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            lbfgs.minimize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = lbfgs.param(i);
+            }
+            result = lbfgs.value();
+        } else if (0 == strcmp(strMethod, "BFGS")) {
+            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            bfgs.minimize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = bfgs.param(i);
+            }
+            result = bfgs.value();
+        } else if (0 == strcmp(strMethod, "CG")) {
+            CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            cg.minimize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = cg.param(i);
+            }
+            result = cg.value();
+        } else {
+            bsp_runtimeError("unknown optMethod for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        } 
+        Py_XDECREF(objParam);
+        return Py_BuildValue("d", result);
+    }
+
+    // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
+    static PyObject *bsp_maximize(PyObject *self, PyObject *args) {
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
+        unsigned long kMaxIter = 1000, kMLim = 20;
+        char *strPenalty = NULL, *strMethod = NULL;
+        int ok = PyArg_ParseTuple(args, "OOO|kkss: bsp.maximize", &objParam, &objFunValue, &objFunGradient,
+                &kMaxIter, &kMLim, &strPenalty, &strMethod);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_RETURN_NONE;
+        }
+        Py_XINCREF(objParam);
+        if (!PyArray_Check(objParam)) {
+            bsp_typeError("invalid params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        }
+        PyArrayObject *numpyArray = (PyArrayObject *)objParam;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        int elemSize = 0;
+        if (strides[nDims - 1] > strides[0]) {
+            elemSize = strides[0];
+        } else {
+            elemSize = strides[nDims - 1];
+        }
+        if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
+            bsp_typeError("invalid type of params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        }
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned long nParams = 1;
+        for (int iDim = 0; iDim < nDims; ++ iDim) {
+            nParams *= dimSize[iDim];
+        }
+
+        double *params = (double *)PyArray_BYTES(numpyArray);
+
+        typedef double (* FunValue)(unsigned long, double *);
+        typedef void (* FunGradient)(unsigned long, double *, double *);
+        FunValue funValue = NULL;
+        FunGradient funGradient = NULL;
+
+        try {
+            PyObject *myParam = Py_BuildValue("(O)", objFunValue);
+            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+            Py_XDECREF(myParam);
+            if (objAddress == NULL) {
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            unsigned long long uAddress = 0;
+            ok = PyArg_Parse(objAddress, "K", &uAddress);
+            if (!ok) {
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            funValue = *(FunValue *) uAddress;
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+
+        try {
+            PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
+            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+            Py_XDECREF(myParam);
+            if (objAddress == NULL) {
+                bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            unsigned long long uAddress = 0;
+            ok = PyArg_Parse(objAddress, "K", &uAddress);
+            if (!ok) {
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                Py_XDECREF(objParam);
+                Py_RETURN_NONE;
+            }
+            funGradient = *(FunGradient *) uAddress;
+        } catch (const std::exception & e) {
+            bsp_runtimeError(e.what());
+        }
+
+        if (kMLim > nParams)
+            kMLim = nParams;
+        double result = 0.0;
+        if (strMethod == NULL) {
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            lbfgs.maximize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = lbfgs.param(i);
+            }
+            result = lbfgs.value();
+        } else if (0 == strcmp(strMethod, "LBFGS")) {
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            lbfgs.maximize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = lbfgs.param(i);
+            }
+            result = lbfgs.value();
+        } else if (0 == strcmp(strMethod, "BFGS")) {
+            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            bfgs.maximize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = bfgs.param(i);
+            }
+            result = bfgs.value();
+        } else if (0 == strcmp(strMethod, "CG")) {
+            CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            cg.maximize();
+            for (unsigned long i = 0; i < nParams; ++ i) {
+                params[i] = cg.param(i);
+            }
+            result = cg.value();
+        } else {
+            bsp_runtimeError("unknown optMethod for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            Py_XDECREF(objParam);
+            Py_RETURN_NONE;
+        } 
+        Py_XDECREF(objParam);
+        return Py_BuildValue("d", result);
+    }
+
+    //static PyObject *bsp_repeat(PyObject *self, PyObject *args) {
+        //PyObject *funcPtr = NULL;
+        //char *strParam = NULL;
+        //int times = 0;
+        //int ok = PyArg_ParseTuple(args, "Osi:bsp.repeat", &funcPtr, &strParam, &times);
+        //if (!ok) {
+            //bsp_typeError("invalid arguments (1) for bsp.repeat(function, params, repeatTimes)");
+            //Py_RETURN_NONE;
+        //}
+
+        //typedef void (*MyFunc)(char *); 
+        //PyObject *param = Py_BuildValue("(O)", funcPtr);
+        //PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, param);
+        //Py_XDECREF(param);
+        //if (objAddress == NULL) {
+            //bsp_typeError("invalid arguments (2) for bsp.repeat(function, params, repeatTimes)");
+            //Py_RETURN_NONE;
+        //}
+        //unsigned long long uAddress = 0;
+        //ok = PyArg_Parse(objAddress, "K", &uAddress);
+        //if (!ok) {
+            //bsp_typeError("invalid arguments (3) for bsp.repeat(function, params, repeatTimes)");
+            //Py_RETURN_NONE;
+        //}
+        //MyFunc myFunc = *(MyFunc *) uAddress;
+        //for (int t = 0; t < times; ++ t) {
+            //myFunc(strParam);
+        //}
+
+        //Py_RETURN_NONE;
+    //}
+
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
         {"procCount",bsp_procCount,METH_VARARGS,"get the number of processes"},
@@ -1532,6 +1837,11 @@ extern "C" {
         {"enableScheduler", bsp_enableScheduler, METH_VARARGS, "enable the scheduler for asynchronization"},
         {"disableScheduler", bsp_disableScheduler, METH_VARARGS, "disable the scheduler for asynchronization"},
 	{"toggleVerbose", bsp_toggleVerbose, METH_VARARGS, "toggle verbose"},
+        {"tic", bsp_tic, METH_VARARGS, "start timing"},
+        {"toc", bsp_toc, METH_VARARGS, "stop timing"},
+        {"minimize", bsp_minimize, METH_VARARGS, "find the minimum of a given function"},
+        {"maximize", bsp_maximize, METH_VARARGS, "find the minimum of a given function"},
+        //{"repeat", bsp_repeat, METH_VARARGS, "repeat an operation"},
         {NULL,NULL,0,NULL}
     };
 
@@ -1574,6 +1884,9 @@ extern "C" {
         pickle_ = PyImport_ImportModule("pickle");
         Py_XINCREF(pickle_);
 
+        ctypes_ = PyImport_ImportModule("ctypes");
+        Py_XINCREF(ctypes_);
+
         traceback_ = PyImport_ImportModule("traceback");
         Py_XINCREF(traceback_);
 
@@ -1584,6 +1897,10 @@ extern "C" {
         pickle_loads_ = PyObject_GetAttrString(pickle_, "loads");
         assert(PyCallable_Check(pickle_loads_));
         Py_XINCREF(pickle_loads_);
+
+        ctypes_addressof_ = PyObject_GetAttrString(ctypes_, "addressof");
+        assert(PyCallable_Check(ctypes_addressof_));
+        Py_XINCREF(ctypes_addressof_);
 
         traceback_extractStack_ = PyObject_GetAttrString(traceback_, "extract_stack");
         Py_XINCREF(traceback_extractStack_);

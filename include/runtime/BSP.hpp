@@ -40,6 +40,13 @@
 #include "BSPLocalRequestRegionSequence.hpp"
 #include "BSPLocalRequestRegionTensor.hpp"
 
+#include "BSPAlgOptimization.hpp"
+#include "BSPAlgGradientBasedOptimization.hpp"
+#include "BSPAlgLineSearch.hpp"
+#include "BSPAlgCG.hpp"
+#include "BSPAlgBFGS.hpp"
+#include "BSPAlgLBFGS.hpp"
+
 #include "BSPRuntime.hpp"
 
 #endif	/* BSP_HPP */
