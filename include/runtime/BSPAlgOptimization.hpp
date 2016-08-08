@@ -21,8 +21,8 @@ namespace BSP {
             public:
                 Optimization(unsigned long nParams, FunValue funValue, unsigned long maxIter, double tol);
                 virtual ~Optimization();
-                void f();
-                void newF();
+                virtual void f();
+                virtual void newF();
                 void updateDf();
                 double reductionScale();
                 virtual void minimize() = 0;
@@ -30,6 +30,9 @@ namespace BSP {
                 inline double value() {return _f;}
                 inline double param(unsigned long i) {return _params[i];}
         };
+        void concensus(double proximityLevel, double centerLevel,
+                unsigned long nWorkers, unsigned long nParamsPerWorker,
+                double *params, double *multipliers, double *center);
     }
 }
 #endif

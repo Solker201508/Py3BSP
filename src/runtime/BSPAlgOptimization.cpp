@@ -39,3 +39,43 @@ double Optimization::reductionScale() {
     else
         return _newDF / _df;
 }
+
+void concensus(double proximityLevel, double centerLevel,
+        unsigned long nWorkers, unsigned long nParamsPerWorker,
+        double *params, double *multipliers, double *center) {
+    proximityLevel = fabs(proximityLevel);
+    bool reflected = false;
+    if (centerLevel < 0) {
+        reflected = true;
+        centerLevel = -centerLevel;
+        unsigned long nParams = nParamsPerWorker * nWorkers;
+        for (unsigned long k = 0; k < nParams; ++ k) {
+            multipliers[k] = -multipliers[k];
+        }
+    }
+    double dominator = nWorkers * centerLevel + proximityLevel;
+    double scale = 1.0 / dominator;
+    for (unsigned int i = 0; i < nParamsPerWorker; ++ i) {
+        center[i] *= proximityLevel;
+        unsigned int k = i;
+        for (unsigned int j = 0; j < nWorkers; ++ j) {
+            center[i] += multipliers[k] + centerLevel * params[k];
+            k += nParamsPerWorker;
+        }
+        center[i] *= scale;
+
+        k = i;
+        for (unsigned int j = 0; j < nWorkers; ++ j) {
+            multipliers[k] += centerLevel * (params[k] - center[i]);
+            k += nParamsPerWorker;
+        }
+    }
+
+    if (reflected) {
+        unsigned long nParams = nParamsPerWorker * nWorkers;
+        for (unsigned long k = 0; k < nParams; ++ k) {
+            multipliers[k] = -multipliers[k];
+        }
+    }
+}
+

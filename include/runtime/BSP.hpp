@@ -46,6 +46,7 @@
 #include "BSPAlgCG.hpp"
 #include "BSPAlgBFGS.hpp"
 #include "BSPAlgLBFGS.hpp"
+#include "BSPAlgApriori.hpp"
 
 #include "BSPRuntime.hpp"
 

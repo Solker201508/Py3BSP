@@ -1522,11 +1522,13 @@ extern "C" {
     }
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
-    static PyObject *bsp_minimize(PyObject *self, PyObject *args) {
+    static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method"};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        int ok = PyArg_ParseTuple(args, "OOO|kkss: bsp.minimize", &objParam, &objFunValue, &objFunGradient,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkss: bsp.minimize", (char **)kwlist, 
+                &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
@@ -1646,11 +1648,13 @@ extern "C" {
     }
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
-    static PyObject *bsp_maximize(PyObject *self, PyObject *args) {
+    static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method"};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        int ok = PyArg_ParseTuple(args, "OOO|kkss: bsp.maximize", &objParam, &objFunValue, &objFunGradient,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkss: bsp.maximize", (char **)kwlist,
+                &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
@@ -1731,11 +1735,26 @@ extern "C" {
             bsp_runtimeError(e.what());
         }
 
+        GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
+        if (strPenalty) {
+            if (0 == strcmp(strPenalty, "LogSum") || 0 == strcmp(strPenalty, "LOGSUM")) {
+                penalty = GradientBasedOptimization::PENALTY_LOGSUM;
+            } else if (0 == strcmp(strPenalty, "L1")) {
+                penalty = GradientBasedOptimization::PENALTY_L1;
+            } else if (0 == strcmp(strPenalty, "L2")) {
+                penalty = GradientBasedOptimization::PENALTY_L2;
+            } else {
+                bsp_runtimeError("bsp.maximize: unknown penalty");
+            }
+        }
+
         if (kMLim > nParams)
             kMLim = nParams;
         double result = 0.0;
         if (strMethod == NULL) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+                lbfgs.setPenalty(penalty);
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1743,6 +1762,8 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "LBFGS")) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+                lbfgs.setPenalty(penalty);
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1750,6 +1771,8 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "BFGS")) {
             BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+                bfgs.setPenalty(penalty);
             bfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = bfgs.param(i);
@@ -1757,6 +1780,8 @@ extern "C" {
             result = bfgs.value();
         } else if (0 == strcmp(strMethod, "CG")) {
             CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+                cg.setPenalty(penalty);
             cg.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = cg.param(i);
@@ -1771,6 +1796,87 @@ extern "C" {
         return Py_BuildValue("d", result);
     }
 
+    // bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate, optThreshold)
+    static PyObject *bsp_findFreqSet(PyObject *self, PyObject *args, PyObject *kwargs) {
+        static const char * kwlist[] = {"sequence", "fileName", "maxWordLen", "template", "threshold"};
+        PyObject *objSeq = NULL, *objTemplate = NULL;
+        char *strFileName = NULL;
+        unsigned long kMaxWordLen = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "Os|ko: bsp.findFreqSet", (char **)kwlist,
+                &objSeq, &strFileName, &kMaxWordLen, &objTemplate);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_RETURN_FALSE;
+        }
+        if (kMaxWordLen != 0 && objTemplate != NULL) {
+            bsp_typeError("optMaxWordLen and optTemplate are not allowed to be used at the same time for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_RETURN_FALSE;
+        }
+        Py_XINCREF(objSeq);
+        if (!PyArray_Check(objSeq)) {
+            bsp_typeError("invalid sequence for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_XDECREF(objSeq);
+            Py_RETURN_FALSE;
+        }
+        PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        unsigned int elemSize = 0;
+        if (strides[nDims - 1] > strides[0]) {
+            elemSize = strides[0];
+        } else {
+            elemSize = strides[nDims - 1];
+        }
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned long nUnits = 1;
+        for (int iDim = 0; iDim < nDims; ++ iDim) {
+            nUnits *= dimSize[iDim];
+        }
+        char *x = PyArray_BYTES(numpyArray);
+        Apriori apriori(elemSize);
+        if (kMaxWordLen > 0) {
+            apriori.scan(nUnits, kMaxWordLen, x);
+        } else {
+            Py_XINCREF(objTemplate);
+            if (PyTuple_Check(objTemplate)) {
+                int t0 = 0, t1 = 0, t2 = 0;
+                ok = PyArg_ParseTuple(objTemplate,"ii|i:bsp.findFreqSet.template",
+                        &t0, &t1, &t2);
+                Py_XDECREF(objTemplate);
+                if (!ok) {
+                    bsp_typeError("invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+                    Py_RETURN_FALSE;
+                }
+                if (t2 == 0) {
+                    if (t1 == 0) {
+                        apriori.scan(nUnits, x, t0);
+                    } else if (t0 == 0) {
+                        apriori.scan(nUnits, x, t1);
+                    } else {
+                        apriori.scan(nUnits, x, t0, t1);
+                    }
+                } else {
+                    if (t0 == 0) {
+                        apriori.scan(nUnits, x, t1, t2);
+                    } else if (t1 == 0) {
+                        apriori.scan(nUnits, x, t0, t2);
+                    } else {
+                        bsp_typeError(
+                                "invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+                        Py_RETURN_FALSE;
+                    }
+                }
+            } else {
+                Py_XDECREF(objTemplate);
+                bsp_typeError(
+                        "invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+                Py_RETURN_FALSE;
+            }
+        }
+        Py_XDECREF(objSeq);
+        apriori.saveToFile(strFileName);
+        Py_RETURN_TRUE;
+    }
     //static PyObject *bsp_repeat(PyObject *self, PyObject *args) {
         //PyObject *funcPtr = NULL;
         //char *strParam = NULL;
@@ -1839,8 +1945,9 @@ extern "C" {
 	{"toggleVerbose", bsp_toggleVerbose, METH_VARARGS, "toggle verbose"},
         {"tic", bsp_tic, METH_VARARGS, "start timing"},
         {"toc", bsp_toc, METH_VARARGS, "stop timing"},
-        {"minimize", bsp_minimize, METH_VARARGS, "find the minimum of a given function"},
-        {"maximize", bsp_maximize, METH_VARARGS, "find the minimum of a given function"},
+        {"minimize", (PyCFunction)bsp_minimize, METH_VARARGS | METH_KEYWORDS, "find the minimum of a given function"},
+        {"maximize", (PyCFunction)bsp_maximize, METH_VARARGS | METH_KEYWORDS, "find the maximum of a given function"},
+        {"findFreqSet", (PyCFunction)bsp_findFreqSet, METH_VARARGS | METH_KEYWORDS, "find the frequent sets of a sequence"},
         //{"repeat", bsp_repeat, METH_VARARGS, "repeat an operation"},
         {NULL,NULL,0,NULL}
     };
