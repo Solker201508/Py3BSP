@@ -29,7 +29,7 @@ Runtime *runtime_ = NULL;
 
 std::string bsp_getScriptPos() {
     std::stringstream ss;
-    ss << runtime_->getMyProcessID() << ": ------ call stack begin ------ " << std::endl;
+    //ss << runtime_->getMyProcessID() << ": ------ call stack begin ------ " << std::endl;
     PyObject *param = Py_BuildValue("()");
     PyObject *stack = PyObject_CallObject(traceback_extractStack_,param);
     Py_DECREF(param);
@@ -50,7 +50,7 @@ std::string bsp_getScriptPos() {
                 << ">>> " << lineText << std::endl;
         }
     }
-    ss << runtime_->getMyProcessID() << ": ------  call stack end  ------ " << std::endl;
+    //ss << runtime_->getMyProcessID() << ": ------  call stack end  ------ " << std::endl;
     return ss.str();
 }
 
@@ -1521,22 +1521,23 @@ extern "C" {
         return Py_BuildValue("d",result);
     }
 
-    // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
+    // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method"};
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkss: bsp.minimize", (char **)kwlist, 
+        double dPenaltyLevel = 1;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkssd: bsp.minimize", (char **)kwlist, 
                 &objParam, &objFunValue, &objFunGradient,
-                &kMaxIter, &kMLim, &strPenalty, &strMethod);
+                &kMaxIter, &kMLim, &strPenalty, &strMethod,&dPenaltyLevel);
         if (!ok) {
-            bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_RETURN_NONE;
         }
         Py_XINCREF(objParam);
         if (!PyArray_Check(objParam)) {
-            bsp_typeError("invalid params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
@@ -1550,7 +1551,7 @@ extern "C" {
             elemSize = strides[nDims - 1];
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
-            bsp_typeError("invalid type of params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid type of params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
@@ -1572,14 +1573,14 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
@@ -1593,14 +1594,14 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
@@ -1609,9 +1610,26 @@ extern "C" {
             bsp_runtimeError(e.what());
         }
 
+        GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
+        if (strPenalty) {
+            if (0 == strcmp(strPenalty, "LogSum") || 0 == strcmp(strPenalty, "LOGSUM")) {
+                penalty = GradientBasedOptimization::PENALTY_LOGSUM;
+            } else if (0 == strcmp(strPenalty, "L1")) {
+                penalty = GradientBasedOptimization::PENALTY_L1;
+            } else if (0 == strcmp(strPenalty, "L2")) {
+                penalty = GradientBasedOptimization::PENALTY_L2;
+            } else {
+                bsp_runtimeError("bsp.minimize: unknown penalty");
+            }
+        }
+
         double result = 0.0;
         if (strMethod == NULL) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
+                lbfgs.setPenalty(penalty);
+                lbfgs.setPenaltyLevel(dPenaltyLevel, false);
+            }
             lbfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1619,6 +1637,10 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "LBFGS")) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
+                lbfgs.setPenalty(penalty);
+                lbfgs.setPenaltyLevel(dPenaltyLevel, false);
+            }
             lbfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1626,6 +1648,10 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "BFGS")) {
             BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
+                bfgs.setPenalty(penalty);
+                bfgs.setPenaltyLevel(dPenaltyLevel, false);
+            }
             bfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = bfgs.param(i);
@@ -1633,13 +1659,17 @@ extern "C" {
             result = bfgs.value();
         } else if (0 == strcmp(strMethod, "CG")) {
             CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
+                cg.setPenalty(penalty);
+                cg.setPenaltyLevel(dPenaltyLevel, false);
+            }
             cg.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = cg.param(i);
             }
             result = cg.value();
         } else {
-            bsp_runtimeError("unknown optMethod for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_runtimeError("unknown optMethod for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         } 
@@ -1647,22 +1677,24 @@ extern "C" {
         return Py_BuildValue("d", result);
     }
 
-    // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)
+    // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method"};
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method",
+                "penaltyLevel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkss: bsp.maximize", (char **)kwlist,
+        double dPenaltyLevel = 1.0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkssd: bsp.maximize", (char **)kwlist,
                 &objParam, &objFunValue, &objFunGradient,
-                &kMaxIter, &kMLim, &strPenalty, &strMethod);
+                &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel);
         if (!ok) {
-            bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_RETURN_NONE;
         }
         Py_XINCREF(objParam);
         if (!PyArray_Check(objParam)) {
-            bsp_typeError("invalid params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
@@ -1676,7 +1708,7 @@ extern "C" {
             elemSize = strides[nDims - 1];
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
-            bsp_typeError("invalid type of params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_typeError("invalid type of params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
@@ -1698,14 +1730,14 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
@@ -1719,14 +1751,14 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
                 Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
@@ -1753,8 +1785,10 @@ extern "C" {
         double result = 0.0;
         if (strMethod == NULL) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
-            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
+                lbfgs.setPenaltyLevel(dPenaltyLevel, true);
+            }
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1762,8 +1796,10 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "LBFGS")) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
-            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
+                lbfgs.setPenaltyLevel(dPenaltyLevel, true);
+            }
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1771,8 +1807,10 @@ extern "C" {
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "BFGS")) {
             BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
-            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 bfgs.setPenalty(penalty);
+                bfgs.setPenaltyLevel(dPenaltyLevel, true);
+            }
             bfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = bfgs.param(i);
@@ -1780,15 +1818,17 @@ extern "C" {
             result = bfgs.value();
         } else if (0 == strcmp(strMethod, "CG")) {
             CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
-            if (penalty != GradientBasedOptimization::PENALTY_NONE)
+            if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 cg.setPenalty(penalty);
+                cg.setPenaltyLevel(dPenaltyLevel, true);
+            }
             cg.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = cg.param(i);
             }
             result = cg.value();
         } else {
-            bsp_runtimeError("unknown optMethod for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod)");
+            bsp_runtimeError("unknown optMethod for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_XDECREF(objParam);
             Py_RETURN_NONE;
         } 
