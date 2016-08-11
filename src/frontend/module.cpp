@@ -1838,20 +1838,49 @@ extern "C" {
 
     // bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate, optThreshold)
     static PyObject *bsp_findFreqSet(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"sequence", "fileName", "maxWordLen", "template", "threshold"};
-        PyObject *objSeq = NULL, *objTemplate = NULL;
+        static const char * kwlist[] = {"sequence", "fileName", "threshold", "maxWordLen", "tmpl2", "tmpl3", NULL};
+        PyObject *objSeq = NULL;
         char *strFileName = NULL;
-        unsigned long kMaxWordLen = 0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "Os|ko: bsp.findFreqSet", (char **)kwlist,
-                &objSeq, &strFileName, &kMaxWordLen, &objTemplate);
+        unsigned long kMaxWordLen = 0, threshold = 2;
+        int t20 = 0, t21 = 0, t30 = 0, t31 = 0, t32 = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "Os|kk(ii)(iii): bsp.findFreqSet", (char **)kwlist,
+                &objSeq, &strFileName, &threshold, &kMaxWordLen, &t20, &t21, &t30, &t31, &t32);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
             Py_RETURN_FALSE;
         }
-        if (kMaxWordLen != 0 && objTemplate != NULL) {
-            bsp_typeError("optMaxWordLen and optTemplate are not allowed to be used at the same time for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+        printf("threshold = %lu, kMaxWordLen = %lu\n", threshold, kMaxWordLen);
+        bool useTmpl2 = (t20 != 0) || (t21 != 0);
+        bool useTmpl3 = (t30 != 0) || (t31 != 0) || (t32 != 0);
+        if ((kMaxWordLen != 0 && useTmpl2) || (kMaxWordLen != 0 && useTmpl3) || (useTmpl2 && useTmpl3)) 
+        {
+            bsp_typeError("maxWordLen and tmpl2 / tmpl3 are not allowed to be used at the same time for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate, threshold)");
             Py_RETURN_FALSE;
         }
+        if (useTmpl2) {
+            if (t20 >= t21) {
+                bsp_typeError("incorrect tmpl2 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+            if (t20 != 0 && t21 != 0) {
+                bsp_typeError("incorrect tmpl2 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+        } else if (useTmpl3) {
+            if (t30 >= t31 || t31 >= t32) {
+                bsp_typeError("incorrect tmpl3 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+            if (t30 != 0 && t31 != 0 && t32 != 0) {
+                bsp_typeError("incorrect tmpl3 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+        }
+
         Py_XINCREF(objSeq);
         if (!PyArray_Check(objSeq)) {
             bsp_typeError("invalid sequence for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
@@ -1874,49 +1903,145 @@ extern "C" {
         }
         char *x = PyArray_BYTES(numpyArray);
         Apriori apriori(elemSize);
+        apriori.setThreshold(threshold);
         if (kMaxWordLen > 0) {
             apriori.scan(nUnits, kMaxWordLen, x);
         } else {
-            Py_XINCREF(objTemplate);
-            if (PyTuple_Check(objTemplate)) {
-                int t0 = 0, t1 = 0, t2 = 0;
-                ok = PyArg_ParseTuple(objTemplate,"ii|i:bsp.findFreqSet.template",
-                        &t0, &t1, &t2);
-                Py_XDECREF(objTemplate);
-                if (!ok) {
-                    bsp_typeError("invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
-                    Py_RETURN_FALSE;
-                }
-                if (t2 == 0) {
-                    if (t1 == 0) {
-                        apriori.scan(nUnits, x, t0);
-                    } else if (t0 == 0) {
-                        apriori.scan(nUnits, x, t1);
-                    } else {
-                        apriori.scan(nUnits, x, t0, t1);
-                    }
+            if (useTmpl2) {
+                if (t20 == 0) {
+                    apriori.scan(nUnits, x, t21);
                 } else {
-                    if (t0 == 0) {
-                        apriori.scan(nUnits, x, t1, t2);
-                    } else if (t1 == 0) {
-                        apriori.scan(nUnits, x, t0, t2);
-                    } else {
-                        bsp_typeError(
-                                "invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
-                        Py_RETURN_FALSE;
-                    }
+                    apriori.scan(nUnits, x, t20);
                 }
-            } else {
-                Py_XDECREF(objTemplate);
-                bsp_typeError(
-                        "invalid template for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
-                Py_RETURN_FALSE;
+            } else if (useTmpl3) {
+                if (t30 == 0) {
+                    apriori.scan(nUnits, x, t31, t32);
+                } else if (t31 == 0) {
+                    apriori.scan(nUnits, x, t30, t32);
+                } else {
+                    apriori.scan(nUnits, x, t30, t31);
+                }
             }
         }
         Py_XDECREF(objSeq);
         apriori.saveToFile(strFileName);
         Py_RETURN_TRUE;
     }
+
+    static PyObject *bsp_getFreq(PyObject *self, PyObject *args, PyObject *kwargs) {
+        static const char * kwlist[] = {"result", "sequence", "fileName", "wordLen", "tmpl2", "tmpl3", "threshold", NULL};
+        PyObject *objSeq = NULL, *objResult = NULL;
+        char *strFileName = NULL;
+        unsigned long kWordLen = 0, threshold = 2;
+        int t20 = 0, t21 = 0, t30 = 0, t31 = 0, t32 = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|k(ii)(iii)k: bsp.findFreqSet", (char **)kwlist,
+                &objResult, &objSeq, &strFileName, &kWordLen, &t20, &t21, &t30, &t31, &t32, &threshold);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_RETURN_FALSE;
+        }
+        bool useTmpl2 = (t20 != 0) || (t21 != 0);
+        bool useTmpl3 = (t30 != 0) || (t31 != 0) || (t32 != 0);
+        if ((kWordLen != 0 && useTmpl2) || (kWordLen != 0 && useTmpl3) || (useTmpl2 && useTmpl3)) 
+        {
+            bsp_typeError("maxWordLen and tmpl2 / tmpl3 are not allowed to be used at the same time for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate, threshold)");
+            Py_RETURN_FALSE;
+        }
+        if (useTmpl2) {
+            if (t20 >= t21) {
+                bsp_typeError("incorrect tmpl2 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+            if (t20 != 0 && t21 != 0) {
+                bsp_typeError("incorrect tmpl2 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+        } else if (useTmpl3) {
+            if (t30 >= t31 || t31 >= t32) {
+                bsp_typeError("incorrect tmpl3 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+            if (t30 != 0 && t31 != 0 && t32 != 0) {
+                bsp_typeError("incorrect tmpl3 for bsp.findFreqSet(sequence, fileName, "
+                    "optMaxWordLen, optTemplate, threshold)");
+                Py_RETURN_FALSE;
+            }
+        }
+
+        Py_XINCREF(objResult);
+        Py_XINCREF(objSeq);
+        if (!PyArray_Check(objResult)) {
+            bsp_typeError("invalid result array for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_XDECREF(objResult);
+            Py_XDECREF(objSeq);
+            Py_RETURN_FALSE;
+        }
+        PyArrayObject *resultArray = (PyArrayObject *)objResult;
+        npy_intp *stridesOfResult = PyArray_STRIDES(resultArray);
+        int nDimsOfResult = PyArray_NDIM(resultArray);
+        unsigned int elemSizeOfResult = 0;
+        if (stridesOfResult[nDimsOfResult - 1] > stridesOfResult[0]) {
+            elemSizeOfResult = stridesOfResult[0];
+        } else {
+            elemSizeOfResult = stridesOfResult[nDimsOfResult - 1];
+        }
+        if (elemSizeOfResult != 4 || !PyArray_ISINTEGER(resultArray)) {
+            bsp_typeError("Invalid element type of the result array for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_XDECREF(objResult);
+            Py_XDECREF(objSeq);
+            Py_RETURN_FALSE;
+        }
+        int *result = (int *)PyArray_BYTES(resultArray);
+        if (!PyArray_Check(objSeq)) {
+            bsp_typeError("invalid sequence for bsp.findFreqSet(sequence, fileName, optMaxWordLen, optTemplate)");
+            Py_XDECREF(objResult);
+            Py_XDECREF(objSeq);
+            Py_RETURN_FALSE;
+        }
+        PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        unsigned int elemSize = 0;
+        if (strides[nDims - 1] > strides[0]) {
+            elemSize = strides[0];
+        } else {
+            elemSize = strides[nDims - 1];
+        }
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned long nUnits = 1;
+        for (int iDim = 0; iDim < nDims; ++ iDim) {
+            nUnits *= dimSize[iDim];
+        }
+        char *x = PyArray_BYTES(numpyArray);
+        Apriori apriori(elemSize);
+        apriori.loadFromFile(strFileName);
+        if (kWordLen > 0) {
+            apriori.getFreq(nUnits, kWordLen, x, result);
+        } else {
+            if (useTmpl2) {
+                if (t20 == 0) {
+                    apriori.getFreq(nUnits, x, t21, result);
+                } else {
+                    apriori.getFreq(nUnits, x, t20, result);
+                }
+            } else if (useTmpl3) {
+                if (t30 == 0) {
+                    apriori.getFreq(nUnits, x, t31, t32, result);
+                } else if (t31 == 0) {
+                    apriori.getFreq(nUnits, x, t30, t32, result);
+                } else {
+                    apriori.getFreq(nUnits, x, t30, t31, result);
+                }
+            }
+        }
+        Py_XDECREF(objResult);
+        Py_XDECREF(objSeq);
+        Py_RETURN_TRUE;
+    }
+
     //static PyObject *bsp_repeat(PyObject *self, PyObject *args) {
         //PyObject *funcPtr = NULL;
         //char *strParam = NULL;
@@ -1988,6 +2113,7 @@ extern "C" {
         {"minimize", (PyCFunction)bsp_minimize, METH_VARARGS | METH_KEYWORDS, "find the minimum of a given function"},
         {"maximize", (PyCFunction)bsp_maximize, METH_VARARGS | METH_KEYWORDS, "find the maximum of a given function"},
         {"findFreqSet", (PyCFunction)bsp_findFreqSet, METH_VARARGS | METH_KEYWORDS, "find the frequent sets of a sequence"},
+        {"getFreq", (PyCFunction)bsp_getFreq, METH_VARARGS | METH_KEYWORDS, "get the frequency of the words in a sequence"},
         //{"repeat", bsp_repeat, METH_VARARGS, "repeat an operation"},
         {NULL,NULL,0,NULL}
     };

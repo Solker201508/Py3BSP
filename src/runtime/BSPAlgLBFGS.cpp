@@ -2,7 +2,7 @@
 #include "BSPAlgLineSearch.hpp"
 #include <cstring>
 #include <cmath>
-//#include <iostream>
+#include <iostream>
 #include <stdexcept>
 
 using namespace BSP;
@@ -89,7 +89,7 @@ void LBFGS::optimize() {
         }
         updateDf();
         //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
-        if (_iter > 3 && reductionScale() < _tol)
+        if (_iter > 3 && (reductionScale() < _tol || _newF == _f))
             break;
         update();
     }

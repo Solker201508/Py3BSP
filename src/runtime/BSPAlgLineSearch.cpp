@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <cmath>
+#include <cfloat>
 
 using namespace BSP::Algorithm;
 
@@ -34,6 +35,10 @@ void LineSearch::maximize() {
 }
 
 void LineSearch::optimize() {
+    for (unsigned long i = 0; i < _nParams; ++ i) {
+        if (_direction[i] != _direction[i])
+            return;
+    }
     f();
     memcpy(_prevParams, _params, _nParams * sizeof(double));
     _prevF = _f;

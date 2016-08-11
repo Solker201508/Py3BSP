@@ -130,7 +130,7 @@ void Apriori::scan(unsigned long nUnits, char *x, int tmplPos1) {
         return;
     }
     unsigned long n = nUnits - wordLen + 1;
-    char *patterns = new char[_unit * n];
+    char *patterns = new char[2 * _unit * n];
     unsigned long *posUnit = new unsigned long[n];
     unsigned int stride1 = _unit;
     if (tmplPos1 < 0) {
@@ -189,7 +189,7 @@ void Apriori::scan(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2) {
     }
 
     unsigned long n = nUnits - wordLen + 1;
-    char *patterns = new char[_unit * n];
+    char *patterns = new char[3 * _unit * n];
     unsigned long *posUnit = new unsigned long[n];
     unsigned int stride1 = _unit, stride2 = _unit;
     if (minTmplPos < 0) {
@@ -249,6 +249,162 @@ unsigned long Apriori::scan(unsigned long nUnits, unsigned long *posUnit, char *
         }
     }
     return result;
+}
+
+void Apriori::getFreq(unsigned long nUnits, unsigned long unitDepth, char *x, int *freq) {
+    unsigned int n = nUnits - unitDepth + 1;
+    unsigned long *posUnit = new unsigned long[n];
+    unsigned long pos = 0;
+    for (unsigned int i = 0; i < n; ++ i) {
+        posUnit[i] = pos;
+        pos += _unit;
+    }
+    getFreq(n, unitDepth * _unit, posUnit, x, freq);
+    for (unsigned long k = nUnits - n; k < nUnits; ++ k) {
+        freq[k] = 0;
+    }
+    delete []posUnit;
+}
+
+void Apriori::getFreq(unsigned long nUnits, char *x, int tmplPos1, int *freq) {
+    unsigned int wordLen = 1;
+    if (tmplPos1 < 0)
+        wordLen -= tmplPos1;
+    else if (tmplPos1 > 0)
+        wordLen += tmplPos1;
+    else {
+        scan(nUnits, 1, x);
+        return;
+    }
+    unsigned long n = nUnits - wordLen + 1;
+    char *patterns = new char[2 * _unit * n];
+    unsigned long *posUnit = new unsigned long[n];
+    unsigned int stride1 = _unit;
+    if (tmplPos1 < 0) {
+        stride1 *= -tmplPos1;
+    } else {
+        stride1 *= tmplPos1;
+    }
+    unsigned long pos = 0;
+    unsigned long posSrc = 0;
+    unsigned long posDst = 0;
+    for (unsigned long i = 0; i < n; ++ i) {
+        posUnit[i] = pos;
+        pos += _unit;
+        pos += _unit;
+
+        for (unsigned int j = 0; j < _unit; ++ j) {
+            patterns[posDst ++] = x[posSrc + j];
+        }
+        for (unsigned int j = 0; j < _unit; ++ j) {
+            patterns[posDst ++] = x[posSrc + stride1 + j];
+        }
+        posSrc += _unit;
+    }
+    if (tmplPos1 < 0) {
+        for (unsigned long i = 0; i < -tmplPos1; ++ i) {
+            freq[i] = 0;
+        }
+        getFreq(n, 2 * _unit, posUnit, patterns, freq - tmplPos1);
+        for (unsigned long i = n - tmplPos1; i < nUnits; ++ i) {
+            freq[i] = 0;
+        }
+    } else {
+        getFreq(n, 2 * _unit, posUnit, patterns, freq);
+        for (unsigned long i = n; i < nUnits; ++ i) {
+            freq[i] = 0;
+        }
+    }
+    delete[] patterns;
+    delete[] posUnit;
+}
+
+void Apriori::getFreq(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2, int *freq) {
+    if (tmplPos1 == tmplPos2) {
+        getFreq(nUnits, x, tmplPos1, freq);
+        return;
+    }
+    int minTmplPos = tmplPos1;
+    int maxTmplPos = tmplPos1;
+    if (tmplPos2 < minTmplPos)
+        minTmplPos = tmplPos2;
+    else
+        maxTmplPos = tmplPos2;
+
+    unsigned int wordLen = 1;
+    if (minTmplPos < 0)
+        wordLen -= tmplPos1;
+    else if (minTmplPos == 0) {
+        getFreq(nUnits, x, maxTmplPos, freq);
+        return;
+    }
+
+    if (maxTmplPos > 0)
+        wordLen += tmplPos1;
+    else if (maxTmplPos == 0) {
+        getFreq(nUnits, x, minTmplPos, freq);
+        return;
+    }
+
+    unsigned long n = nUnits - wordLen + 1;
+    char *patterns = new char[3 * _unit * n];
+    unsigned long *posUnit = new unsigned long[n];
+    unsigned int stride1 = _unit, stride2 = _unit;
+    if (minTmplPos < 0) {
+        if (maxTmplPos < 0) {
+            stride1 *= maxTmplPos-minTmplPos;
+            stride2 *= -minTmplPos;
+        } else {
+            stride1 *= -minTmplPos;
+            stride2 *= maxTmplPos;
+        }
+    } else {
+        stride1 *= minTmplPos;
+        stride2 *= maxTmplPos;
+    }
+
+    unsigned long pos = 0;
+    unsigned long posSrc = 0;
+    unsigned long posDst = 0;
+    for (unsigned long i = 0; i < n; ++ i) {
+        posUnit[i] = pos;
+        pos += _unit;
+        pos += _unit;
+        pos += _unit;
+
+        for (unsigned int j = 0; j < _unit; ++ j) {
+            patterns[posDst ++] = x[posSrc + j];
+        }
+        for (unsigned int j = 0; j < _unit; ++ j) {
+            patterns[posDst ++] = x[posSrc + stride1 + j];
+        }
+        for (unsigned int j = 0; j < _unit; ++ j) {
+            patterns[posDst ++] = x[posSrc + stride2 + j];
+        }
+        posSrc += _unit;
+    }
+    if (minTmplPos < 0) {
+        for (unsigned long i = 0; i < -minTmplPos; ++ i) {
+            freq[i] = 0;
+        }
+        getFreq(n, 3 * _unit, posUnit, patterns, freq - minTmplPos);
+        for (unsigned long i = n - minTmplPos; i < nUnits; ++ i) {
+            freq[i] = 0;
+        }
+    } else {
+        getFreq(n, 3 * _unit, posUnit, patterns, freq);
+        for (unsigned long i = n; i < nUnits; ++ i) {
+            freq[i] = 0;
+        }
+    }
+    delete[] patterns;
+    delete[] posUnit;
+}
+
+void Apriori::getFreq(unsigned long nUnits, unsigned int depth, unsigned long *posUnit, char *x, int *Freq) {
+    for (unsigned long iUnit = 0; iUnit < nUnits; ++ iUnit) {
+        Freq[iUnit] = _root.countOf(depth, x + posUnit[iUnit]);
+    }
 }
 
 void Apriori::saveToFile(char *fileName) {
