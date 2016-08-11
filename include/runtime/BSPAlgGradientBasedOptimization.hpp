@@ -47,6 +47,7 @@ namespace BSP {
 
                 double proximity(double *params);
                 void applyProximity(double *params, double *result);
+                void richardson(double *params, double *g);
         };
     }
 }

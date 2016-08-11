@@ -2,7 +2,7 @@
 #include "BSPAlgLineSearch.hpp"
 #include <stdexcept>
 #include <cstring>
-//#include <iostream>
+#include <iostream>
 
 using namespace BSP::Algorithm;
 
@@ -62,7 +62,12 @@ void CG::optimize() {
         newG();
         findDirection();
         updateDf();
-        //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
+        std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
+        if (_newF != _newF)
+            break;
+        if (_toMaximize? _newF <= _f : _newF >= _f) {
+            break;
+        }
         if (_iter > 3 && reductionScale() < _tol)
             break;
         update();

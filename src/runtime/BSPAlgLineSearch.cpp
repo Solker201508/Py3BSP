@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cmath>
 #include <cfloat>
+#include <iostream>
 
 using namespace BSP::Algorithm;
 
@@ -78,6 +79,13 @@ void LineSearch::optimize() {
             if (_newF < _f) {
                 if (_newF < _prevF) {
                     // _newF is the smallest
+                    if (_f < _prevF) {
+                        for (unsigned long i = 0; i < _nParams; ++i) {
+                            _params[i] = _prevParams[i];
+                        }
+                        _f = _prevF;
+                    }
+                    return;
                 } else {
                     // _prevF is the smallest
                     memcpy(_prevParams, _newParams, _nParams * sizeof(double));
@@ -101,6 +109,13 @@ void LineSearch::optimize() {
             if (_newF > _f) {
                 if (_newF > _prevF) {
                     // _newF is the largest
+                    if (_f > _prevF) {
+                        for (unsigned long i = 0; i < _nParams; ++i) {
+                            _params[i] = _prevParams[i];
+                        }
+                        _f = _prevF;
+                    }
+                    return;
                 } else {
                     // _prevF is the largest
                     memcpy(_prevParams, _newParams, _nParams * sizeof(double));
@@ -121,6 +136,7 @@ void LineSearch::optimize() {
                 }
             }
         }
+        //std::cout << "0: f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
         for (unsigned long i = 0; i < _nParams; ++i) {
             _newParams[i] = _params[i] + (newW - _v) * _direction[i];
         }

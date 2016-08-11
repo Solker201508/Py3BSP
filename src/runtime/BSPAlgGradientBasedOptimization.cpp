@@ -123,7 +123,11 @@ void GradientBasedOptimization::newF() {
 }
 
 void GradientBasedOptimization::g() {
-    _gradient(_nParams, _params, _g);
+    if (_gradient) {
+        _gradient(_nParams, _params, _g);
+    } else {
+        richardson(_params, _g);
+    }
     applyProximity(_params, _g);
     applyConcensus(_params, _g);
     switch (_penalty) {
@@ -142,7 +146,11 @@ void GradientBasedOptimization::g() {
 }
 
 void GradientBasedOptimization::newG() {
-    _gradient(_nParams, _newParams, _newG);
+    if (_gradient) {
+        _gradient(_nParams, _newParams, _newG);
+    } else {
+        richardson(_newParams, _newG);
+    }
     applyProximity(_newParams, _newG);
     applyConcensus(_newParams, _newG);
     switch (_penalty) {
@@ -332,4 +340,31 @@ double GradientBasedOptimization::concensus(double *params) {
     return result;
 }
 
+void GradientBasedOptimization::richardson(double *params, double *g) {
+    double G[8];
+    double *x = new double[_nParams];
+    for (unsigned long i = 0; i < _nParams; ++ i) {
+        x[i] = params[i];
+    }
+    for (unsigned long i = 0; i < _nParams; ++ i) {
+        double h = 1e-6;
+        for (unsigned int j = 0; j < 8; ++ j) {
+            x[i] = params[i] + h;
+            double fp = _funValue(_nParams, x);
+            x[i] = params[i] - h;
+            double fn = _funValue(_nParams, x);
+            G[j] = (fp - fn) / (2.0 * h);
+            h *= 0.5;
+        }
+        double w = 1;
+        for (unsigned int k = 1; k < 8; ++ k) {
+            w *= 4;
+            for (unsigned int j = k; j < 8; ++ j) {
+                G[j - k] = (w * G[j - k + 1] - G[j - k]) / (w - 1);
+            }
+        }
+        g[i] = G[0];
+    }
+    delete []x;
+}
 

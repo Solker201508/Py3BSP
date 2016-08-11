@@ -68,9 +68,11 @@ void LBFGS::optimize() {
         _g2 += _g[i] * _g[i];
     }
     memcpy(_direction, _g, sizeof(double) * _nParams);
+    //std::cout << "begin !" << std::endl;
+    unsigned int restarted = 0;
     for (_iter = 0; _iter < _maxIter; ++_iter) {
-        if (_iter < _mLim)
-            findDirection(_iter);
+        if (_iter - restarted < _mLim)
+            findDirection(_iter - restarted);
         else
             findDirection(_mLim);
         LineSearch lineSearch(_nParams, _funValue, _maxIter, _params, _direction);
@@ -89,8 +91,40 @@ void LBFGS::optimize() {
         }
         updateDf();
         //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
-        if (_iter > 3 && (reductionScale() < _tol || _newF == _f))
+        //std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+        if (_newF != _newF)
             break;
+        if (_toMaximize? _newF <= _f : _newF >= _f) {
+            restarted = _iter;
+            memcpy(_direction, _g, sizeof(double) * _nParams);
+
+            findDirection(0);
+            LineSearch restartedLineSearch(_nParams, _funValue, _maxIter, _params, _direction);
+            if (_toMaximize)
+                restartedLineSearch.maximize();
+            else
+                restartedLineSearch.minimize();
+            for (unsigned long i = 0; i < _nParams; ++i) {
+                _newParams[i] = restartedLineSearch.param(i);
+            }
+            newF();
+            newG();
+            _newG2 = 0.0;
+            for (unsigned long i = 0; i < _nParams; ++i) {
+                _newG2 += _newG[i] * _newG[i];
+            }
+            updateDf();
+            //std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+            if (_newF != _newF)
+                break;
+            if (_toMaximize? _newF <= _f : _newF >= _f)
+                break;
+            if (_iter > 3 && reductionScale() < _tol)
+                break;
+        }
+        //double rs = reductionScale();
+        //if (_iter > 3 && (rs < _tol || rs != rs ))
+        //    break;
         update();
     }
 }

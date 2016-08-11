@@ -1528,7 +1528,7 @@ extern "C" {
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
         double dPenaltyLevel = 1;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkssd: bsp.minimize", (char **)kwlist, 
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd: bsp.minimize", (char **)kwlist, 
                 &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod,&dPenaltyLevel);
         if (!ok) {
@@ -1589,25 +1589,27 @@ extern "C" {
             bsp_runtimeError(e.what());
         }
 
-        try {
-            PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
-            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
-            Py_XDECREF(myParam);
-            if (objAddress == NULL) {
-                bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
-                Py_RETURN_NONE;
+        if (objFunGradient) {
+            try {
+                PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
+                PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+                Py_XDECREF(myParam);
+                if (objAddress == NULL) {
+                    bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    Py_XDECREF(objParam);
+                    Py_RETURN_NONE;
+                }
+                unsigned long long uAddress = 0;
+                ok = PyArg_Parse(objAddress, "K", &uAddress);
+                if (!ok) {
+                    bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    Py_XDECREF(objParam);
+                    Py_RETURN_NONE;
+                }
+                funGradient = *(FunGradient *) uAddress;
+            } catch (const std::exception & e) {
+                bsp_runtimeError(e.what());
             }
-            unsigned long long uAddress = 0;
-            ok = PyArg_Parse(objAddress, "K", &uAddress);
-            if (!ok) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
-                Py_RETURN_NONE;
-            }
-            funGradient = *(FunGradient *) uAddress;
-        } catch (const std::exception & e) {
-            bsp_runtimeError(e.what());
         }
 
         GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
@@ -1685,7 +1687,7 @@ extern "C" {
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
         double dPenaltyLevel = 1.0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOO|kkssd: bsp.maximize", (char **)kwlist,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd: bsp.maximize", (char **)kwlist,
                 &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel);
         if (!ok) {
@@ -1746,25 +1748,27 @@ extern "C" {
             bsp_runtimeError(e.what());
         }
 
-        try {
-            PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
-            PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
-            Py_XDECREF(myParam);
-            if (objAddress == NULL) {
-                bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
-                Py_RETURN_NONE;
+        if (objFunGradient) {
+            try {
+                PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
+                PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
+                Py_XDECREF(myParam);
+                if (objAddress == NULL) {
+                    bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    Py_XDECREF(objParam);
+                    Py_RETURN_NONE;
+                }
+                unsigned long long uAddress = 0;
+                ok = PyArg_Parse(objAddress, "K", &uAddress);
+                if (!ok) {
+                    bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    Py_XDECREF(objParam);
+                    Py_RETURN_NONE;
+                }
+                funGradient = *(FunGradient *) uAddress;
+            } catch (const std::exception & e) {
+                bsp_runtimeError(e.what());
             }
-            unsigned long long uAddress = 0;
-            ok = PyArg_Parse(objAddress, "K", &uAddress);
-            if (!ok) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
-                Py_RETURN_NONE;
-            }
-            funGradient = *(FunGradient *) uAddress;
-        } catch (const std::exception & e) {
-            bsp_runtimeError(e.what());
         }
 
         GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
@@ -2037,6 +2041,10 @@ extern "C" {
                 }
             }
         }
+        for (unsigned int i = 0; i < 10; ++ i) {
+            printf("%d ", result[i]);
+        }
+        printf("\n");
         Py_XDECREF(objResult);
         Py_XDECREF(objSeq);
         Py_RETURN_TRUE;

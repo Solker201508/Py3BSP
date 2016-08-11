@@ -1,6 +1,7 @@
 #include "BSPAlgApriori.hpp"
 #include <stdexcept>
 #include <cassert>
+#include <iostream>
 
 using namespace BSP::Algorithm;
 
@@ -32,8 +33,9 @@ unsigned long Apriori::Node::countOf(unsigned int k, char *x) {
         return 0;
     if (k == 1)
         return _counter[i];
-    if (_children[i] == NULL)
+    if (_children[i] == NULL) {
         return 0;
+    }
     return _children[i]->countOf(k - 1, x + 1);
 }
 
@@ -50,9 +52,9 @@ void Apriori::Node::add(unsigned int k, char *x) {
 }
 
 void Apriori::Node::spawn(unsigned int k, unsigned int threshold) {
-    if (k <= 1)
+    if (k <= 0)
         return;
-    if (k == 2) {
+    if (k == 1) {
         for (unsigned int iChild = 0; iChild < 256; ++ iChild) {
             if (_counter[iChild] > threshold)
                 _children[iChild] = new Node();
@@ -234,10 +236,10 @@ void Apriori::scan(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2) {
 
 unsigned long Apriori::scan(unsigned long nUnits, unsigned long *posUnit, char *x) {
     for (unsigned int iChar = 0; iChar < _unit; ++ iChar) {
+        ++ _depth;
         for (unsigned long iUnit = 0; iUnit < nUnits; ++ iUnit) {
             _root.add(_depth, x + posUnit[iUnit]);
         }
-        ++ _depth;
         _root.spawn(_depth, _threshold);
     }
 
@@ -260,7 +262,7 @@ void Apriori::getFreq(unsigned long nUnits, unsigned long unitDepth, char *x, in
         pos += _unit;
     }
     getFreq(n, unitDepth * _unit, posUnit, x, freq);
-    for (unsigned long k = nUnits - n; k < nUnits; ++ k) {
+    for (unsigned long k = n; k < nUnits; ++ k) {
         freq[k] = 0;
     }
     delete []posUnit;
@@ -404,6 +406,9 @@ void Apriori::getFreq(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2,
 void Apriori::getFreq(unsigned long nUnits, unsigned int depth, unsigned long *posUnit, char *x, int *Freq) {
     for (unsigned long iUnit = 0; iUnit < nUnits; ++ iUnit) {
         Freq[iUnit] = _root.countOf(depth, x + posUnit[iUnit]);
+        if (iUnit < 10) {
+            std::cout << "Freq[" << iUnit << "] = " << Freq[iUnit] << std::endl;
+        }
     }
 }
 
