@@ -8,7 +8,11 @@ using namespace BSP::Algorithm;
 Apriori::Node::Node() {
     for (unsigned int i = 0; i < 256; ++ i) {
         _counter[i] = 0;
+        _counterLeft[i] = 0;
+        _counterRight[i] = 0;
         _children[i] = NULL;
+        _left[i] = NULL;
+        _right[i] = NULL;
     }
 }
 
@@ -20,8 +24,16 @@ void Apriori::Node::reset() {
     for (unsigned int i = 0; i < 256; ++ i) {
         if (NULL != _children[i])
             delete _children[i];
+        if (NULL != _left[i])
+            delete _left[i];
+        if (NULL != _right[i])
+            delete _right[i];
         _counter[i] = 0;
         _children[i] = NULL;
+        _counterLeft[i] = 0;
+        _left[i] = NULL;
+        _counterRight[i] = 0;
+        _right[i] = NULL;
     }
 }
 
@@ -51,6 +63,45 @@ void Apriori::Node::add(unsigned int k, char *x) {
         _children[i]->add(k - 1, x + 1);
 }
 
+void Apriori::Node::add(char *x, unsigned int k) {
+    if (k <= 0)
+        return;
+    unsigned char i = (unsigned char)x[0];
+    _counter[i] += 1;
+    if (k == 1) {
+        return;
+    }
+    if (NULL == _children[i])
+        _children[i] = new Node();
+    _children[i]->add(x+1, k-1);
+}
+
+void Apriori::Node::addLeft(char *x, unsigned int k) {
+    if (k == 0)
+        return;
+    unsigned char i = (unsigned char)x[0];
+    _counterLeft[i] += 1;
+    if (k > 1) {
+        if (NULL == _left[i]) {
+            _left[i] = new Node();
+        }
+        _left[i]->add(x + 1, k - 1);
+    }
+}
+
+void Apriori::Node::addRight(char *x, unsigned int k) {
+    if (k == 0)
+        return;
+    unsigned char i = (unsigned char)x[0];
+    _counterRight[i] += 1;
+    if (k > 1) {
+        if (NULL == _right[i]) {
+            _right[i] = new Node();
+        }
+        _right[i]->add(x + 1, k - 1);
+    }
+}
+
 void Apriori::Node::spawn(unsigned int k, unsigned int threshold) {
     if (k <= 0)
         return;
@@ -65,6 +116,19 @@ void Apriori::Node::spawn(unsigned int k, unsigned int threshold) {
                 _children[iChild]->spawn(k - 1, threshold);
         }
     }
+}
+
+void Apriori::Node::addLROf(unsigned int k, char *x, unsigned int h, char *left, char *right) {
+    if (k <= 0)
+        return;
+    unsigned char i = (unsigned char)x[0];
+    if (k == 1) {
+        addLeft(left, h);
+        addRight(right, h);
+        return;
+    }
+    if (_children[i] != NULL)
+        _children[i]->addLROf(k - 1, x + 1, h, left, right);
 }
 
 void Apriori::Node::saveToFile(FILE *file) {
@@ -116,7 +180,7 @@ void Apriori::scan(unsigned long nUnits, unsigned long unitDepth, char *x) {
         pos += _unit;
     }
     for (unsigned long k = 0; k < unitDepth; ++ k) {
-        n = scan(n, posUnit, x);
+        n = scan(n, posUnit, x, true);
     }
     delete []posUnit;
 }
@@ -156,7 +220,7 @@ void Apriori::scan(unsigned long nUnits, char *x, int tmplPos1) {
         }
         posSrc += _unit;
     }
-    for (unsigned int i = 0; i < 2 * _unit; ++ i) {
+    for (unsigned int i = 0; i < 2; ++ i) {
         n = scan(n, posUnit, patterns);
     }
     delete[] patterns;
@@ -227,26 +291,29 @@ void Apriori::scan(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2) {
         }
         posSrc += _unit;
     }
-    for (unsigned int i = 0; i < 3 * _unit; ++ i) {
+    for (unsigned int i = 0; i < 3; ++ i) {
         n = scan(n, posUnit, patterns);
     }
     delete[] patterns;
     delete[] posUnit;
 }
 
-unsigned long Apriori::scan(unsigned long nUnits, unsigned long *posUnit, char *x) {
+unsigned long Apriori::scan(unsigned long nUnits, unsigned long *posUnit, char *x, bool scanLR) {
     for (unsigned int iChar = 0; iChar < _unit; ++ iChar) {
+        _root.spawn(_depth, _threshold);
         ++ _depth;
         for (unsigned long iUnit = 0; iUnit < nUnits; ++ iUnit) {
             _root.add(_depth, x + posUnit[iUnit]);
         }
-        _root.spawn(_depth, _threshold);
     }
 
     unsigned long result = 0;
     for (unsigned long iUnit = 0; iUnit < nUnits; ++ iUnit) {
         if (_root.countOf(_depth, x + posUnit[iUnit]) > _threshold) {
             posUnit[result] = posUnit[iUnit];
+            if (scanLR) {
+                _root.addLROf(_depth, x + posUnit[iUnit], _unit, x + posUnit[iUnit] - _unit, x + posUnit[iUnit] + _depth);
+            }
             ++ result;
         }
     }
