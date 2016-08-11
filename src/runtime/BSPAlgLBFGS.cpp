@@ -91,7 +91,7 @@ void LBFGS::optimize() {
         }
         updateDf();
         //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
-        //std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+        std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
         if (_newF != _newF)
             break;
         if (_toMaximize? _newF <= _f : _newF >= _f) {
@@ -114,7 +114,7 @@ void LBFGS::optimize() {
                 _newG2 += _newG[i] * _newG[i];
             }
             updateDf();
-            //std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+            std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
             if (_newF != _newF)
                 break;
             if (_toMaximize? _newF <= _f : _newF >= _f)

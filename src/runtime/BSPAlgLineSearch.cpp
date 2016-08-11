@@ -36,11 +36,16 @@ void LineSearch::maximize() {
 }
 
 void LineSearch::optimize() {
+    double d2 = 0.0;
     for (unsigned long i = 0; i < _nParams; ++ i) {
         if (_direction[i] != _direction[i])
             return;
+        d2 += _direction[i] * _direction[i];
     }
     f();
+    if (d2 == 0.0)
+        return;
+
     memcpy(_prevParams, _params, _nParams * sizeof(double));
     _prevF = _f;
     _u = 0.0;
@@ -52,10 +57,23 @@ void LineSearch::optimize() {
     _v = 1.0;
 
     if (_toMaximize) {
-        _w = (_f < _prevF) ? 0.5 : 2.0;
+        while (_f < _prevF) {
+            _v *= 0.5;
+            for (unsigned long i = 0; i < _nParams; ++i) {
+                _params[i] = _prevParams[i] + _v * _direction[i];
+            }
+            f();
+        }
     } else {
-        _w = (_f > _prevF) ? 0.5 : 2.0;
+        while (_f > _prevF) {
+            _v *= 0.5;
+            for (unsigned long i = 0; i < _nParams; ++i) {
+                _params[i] = _prevParams[i] + _v * _direction[i];
+            }
+            f();
+        }
     }
+    _w = 0.5 * _v;
     for (unsigned long i = 0; i < _nParams; ++i) {
         _newParams[i] = _prevParams[i] + _w * _direction[i];
     }
@@ -79,13 +97,6 @@ void LineSearch::optimize() {
             if (_newF < _f) {
                 if (_newF < _prevF) {
                     // _newF is the smallest
-                    if (_f < _prevF) {
-                        for (unsigned long i = 0; i < _nParams; ++i) {
-                            _params[i] = _prevParams[i];
-                        }
-                        _f = _prevF;
-                    }
-                    return;
                 } else {
                     // _prevF is the smallest
                     memcpy(_prevParams, _newParams, _nParams * sizeof(double));
@@ -108,14 +119,6 @@ void LineSearch::optimize() {
         } else {
             if (_newF > _f) {
                 if (_newF > _prevF) {
-                    // _newF is the largest
-                    if (_f > _prevF) {
-                        for (unsigned long i = 0; i < _nParams; ++i) {
-                            _params[i] = _prevParams[i];
-                        }
-                        _f = _prevF;
-                    }
-                    return;
                 } else {
                     // _prevF is the largest
                     memcpy(_prevParams, _newParams, _nParams * sizeof(double));
@@ -143,7 +146,37 @@ void LineSearch::optimize() {
         _w = newW;
         newF();
         if (fabs(_w - _v) < 1e-8 || fabs(_w - _u) < 1e-8) {
-            return;
+            if (_toMaximize) {
+                if (_newF <= _f) {
+                    if (_f < _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    }
+                } else {
+                    if (_newF < _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    } else {
+                        memcpy(_params, _newParams, _nParams * sizeof(double));
+                        _f = _newF;
+                    }
+                }
+            } else {
+                if (_newF >= _f) {
+                    if (_f > _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    }
+                } else {
+                    if (_newF > _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    } else {
+                        memcpy(_params, _newParams, _nParams * sizeof(double));
+                        _f = _newF;
+                    }
+                }
+            }
         }
     }
 }
