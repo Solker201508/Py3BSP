@@ -1,51 +1,42 @@
 #ifndef __BSP_ALG_APRIORI_HPP__
 #define __BSP_ALG_APRIORI_HPP__
-#include <cstdio>
-
+#include <map>
 namespace BSP {
     namespace Algorithm {
         class Apriori {
-            class Node {
-                private:
-                    Node *_children[256];
-                    Node *_left[256];
-                    Node *_right[256];
-                    unsigned int _counter[256];
-                    unsigned int _counterLeft[256];
-                    unsigned int _counterRight[256];
-                public:
-                    Node();
-                    ~Node();
-                    void reset();
-                    unsigned long countOf(unsigned int k, char *x);
-                    void add(unsigned int k, char *x);
-                    void spawn(unsigned int k, unsigned int threshold);
-                    void saveToFile(FILE *file);
-                    void loadFromFile(FILE *file);
-                    void addLROf(unsigned int k, char *x, unsigned int h, char *left, char *right);
-                private:
-                    void addLeft(char *x, unsigned int k);
-                    void addRight(char *x, unsigned int k);
-                    void add(char *x, unsigned int k);
-
-            };
             private:
-                unsigned int _unit;
-                unsigned int _depth;
+                std::map<unsigned short, unsigned long> _w1;
+                std::map<unsigned long, unsigned long> _w2;
+                std::map<unsigned long long, unsigned long> _w3, _w4;
+                std::map<unsigned short, double> _bel1, _ber1;
+                std::map<unsigned long, double> _bel2, _ber2;
+                std::map<unsigned long long, double> _bel3, _ber3, _bel4, _ber4;
+                std::map<unsigned long, unsigned long> _i2;
+                std::map<unsigned long long, unsigned long> _i3;
+                std::map<unsigned long long, unsigned long> _i4;
                 unsigned int _threshold;
-                Node _root;
+            protected:
+                void scan1(unsigned long n, unsigned short *x); 
+                void scan2(unsigned long n, unsigned short *x);
+                void scan2(unsigned long n, int pos1, int pos2, unsigned short *x);
+                void scan3(unsigned long n, unsigned short *x);
+                void scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x);
+                void scan4(unsigned long n, unsigned short *x);
+                void scan4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x);
             public:
-                Apriori(unsigned int unit);
+                Apriori(unsigned int threshold);
                 ~Apriori();
-                void setThreshold(unsigned int threshold);
-                void scan(unsigned long nUnits, unsigned long unitDepth, char *x);
-                void scan(unsigned long nUnits, char *x, int tmplPos1);
-                void scan(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2);
-                unsigned long scan(unsigned long nUnits, unsigned long *posUnit, char *x, bool scanLR = false);
-                void getFreq(unsigned long nUnits, unsigned long unitDepth, char *x, int *Freq);
-                void getFreq(unsigned long nUnits, char *x, int tmplPos1, int *Freq);
-                void getFreq(unsigned long nUnits, char *x, int tmplPos1, int tmplPos2, int *Freq);
-                void getFreq(unsigned long nUnits, unsigned int depth, unsigned long *posUnit, char *x, int *Freq);
+                void scan(unsigned long n, unsigned short *x);
+                void scan(unsigned long n, int pos1, int pos2, unsigned short *x);
+                void scan(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x);
+                void scan(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x);
+                void getFreq(unsigned long n, unsigned short *x, 
+                        int *freq1, int *freq2, int *freq3, int *freq4,
+                        double *bel1, double *ber1, double *bel2, double *ber2,
+                        double *bel3, double *ber3, double *bel4, double *ber4);
+                int getIndex2(unsigned long n, int pos1, int pos2, unsigned short *x, int start, int *index);
+                int getIndex3(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x, int start, int *index);
+                int getIndex4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x, int start, int *index);
                 void saveToFile(char *fileName);
                 void loadFromFile(char *fileName);
         };

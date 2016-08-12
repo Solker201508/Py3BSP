@@ -1,9 +1,9 @@
 #ifndef __BSP_ALG_LINE_SEARCH_HPP__
 #define __BSP_ALG_LINE_SEARCH_HPP__
-#include "BSPAlgOptimization.hpp"
+#include "BSPAlgGradientBasedOptimization.hpp"
 namespace BSP {
     namespace Algorithm {
-        class LineSearch : public Optimization {
+        class LineSearch : public GradientBasedOptimization {
             private:
                 double *_direction;
                 double *_prevParams;

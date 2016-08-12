@@ -8,7 +8,7 @@
 using namespace BSP::Algorithm;
 
 LineSearch::LineSearch(unsigned long nParams, FunValue funValue, unsigned long maxIter, double *params0, double *direction):
-    Optimization(nParams, funValue, maxIter, 1.0)
+    GradientBasedOptimization(nParams, funValue, maxIter, 1.0, NULL)
 {
     _prevParams = new double[_nParams];
     _direction = new double[_nParams];
@@ -45,16 +45,17 @@ void LineSearch::optimize() {
     f();
     if (d2 == 0.0)
         return;
+    //std::cout << "d2 = " << d2 << std::endl;
 
     memcpy(_prevParams, _params, _nParams * sizeof(double));
     _prevF = _f;
     _u = 0.0;
 
+    _v = 1.0/ sqrt(d2);
     for (unsigned long i = 0; i < _nParams; ++i) {
-        _params[i] = _prevParams[i] + _direction[i];
+        _params[i] = _prevParams[i] + _v * _direction[i];
     }
     f();
-    _v = 1.0;
 
     if (_toMaximize) {
         while (_f < _prevF) {
@@ -80,6 +81,7 @@ void LineSearch::optimize() {
     newF();
 
     //std::cout << "0: f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
+    //std::cout << "0: u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
 
     for (_iter = 0; _iter < _maxIter; ++_iter) {
         double umvfw = (_u - _v) * _newF;
@@ -90,6 +92,7 @@ void LineSearch::optimize() {
         double vpw = _v + _w;
         double dominiator = vmwfu - umwfv + umvfw;
         if (dominiator == 0.0) {
+            //std::cout << "dominiator == 0 " << std::endl;
             break;
         }
         double newW = 0.5 * (vmwfu * vpw - umwfv * upw + umvfw * upv) / dominiator;
@@ -139,12 +142,64 @@ void LineSearch::optimize() {
                 }
             }
         }
-        //std::cout << "0: f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
+        //std::cout << _iter << ": f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
+        //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
+        if (fabs(newW - _w) < 1e-8 * fabs(_w)) {
+            //std::cout << _iter << "newW == w" << std::endl;
+            if (_toMaximize) {
+                if (_newF <= _f) {
+                    if (_f < _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    } else {
+                    }
+                } else {
+                    if (_newF < _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    } else {
+                        memcpy(_params, _newParams, _nParams * sizeof(double));
+                        _f = _newF;
+                    }
+                }
+            } else {
+                if (_newF >= _f) {
+                    if (_f > _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    }
+                } else {
+                    if (_newF > _prevF) {
+                        memcpy(_params, _prevParams, _nParams * sizeof(double));
+                        _f = _prevF;
+                    } else {
+                        memcpy(_params, _newParams, _nParams * sizeof(double));
+                        _f = _newF;
+                    }
+                }
+            }
+            break;
+        }
+        //std::cout << _iter << ": newW - w = " << newW - _w << std::endl;
         for (unsigned long i = 0; i < _nParams; ++i) {
             _newParams[i] = _params[i] + (newW - _v) * _direction[i];
         }
         _w = newW;
         newF();
+        if (_newF != _newF) {
+            if (_toMaximize) {
+                if (_prevF > _f) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
+                }
+            } else {
+                if (_prevF < _f) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
+                }
+            }
+            break;
+        }
         if (fabs(_w - _v) < 1e-8 || fabs(_w - _u) < 1e-8) {
             if (_toMaximize) {
                 if (_newF <= _f) {
@@ -177,6 +232,7 @@ void LineSearch::optimize() {
                     }
                 }
             }
+            break;
         }
     }
 }
