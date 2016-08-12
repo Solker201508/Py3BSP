@@ -1947,21 +1947,22 @@ extern "C" {
             Py_XDECREF(objFreq);
             Py_RETURN_FALSE;
         }
-        PyArrayObject *freqArray = (PyArrayObject *)objSeq;
+        PyArrayObject *freqArray = (PyArrayObject *)objFreq;
         npy_intp *stridesFreq = PyArray_STRIDES(freqArray);
-        int nDimsFreq = PyArray_NDIM(numpyArray);
+        int nDimsFreq = PyArray_NDIM(freqArray);
         unsigned int elemSizeFreq = 0;
         if (stridesFreq[nDimsFreq - 1] > stridesFreq[0]) {
             elemSizeFreq = stridesFreq[0];
         } else {
             elemSizeFreq = stridesFreq[nDimsFreq - 1];
         }
-        npy_intp *dimSizeFreq = PyArray_DIMS(numpyArray);
+        npy_intp *dimSizeFreq = PyArray_DIMS(freqArray);
         unsigned long nFreq = 1;
         for (int iDim = 0; iDim < nDimsFreq; ++ iDim) {
             nFreq *= dimSizeFreq[iDim];
         }
         if (!PyArray_ISINTEGER(freqArray) || elemSizeFreq != 4 || nFreq != nUnits * 4) {
+            std::cout << PyArray_ISINTEGER(freqArray) << ", " << elemSizeFreq << ", " << nFreq << ", " << nUnits << std::endl;
             bsp_typeError("invalid type of freq for bsp.getFreq(freq, be, sequence, fileName)");
             Py_XDECREF(objSeq);
             Py_XDECREF(objFreq);

@@ -146,38 +146,6 @@ void LineSearch::optimize() {
         //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
         if (fabs(newW - _w) < 1e-8 * fabs(_w)) {
             //std::cout << _iter << "newW == w" << std::endl;
-            if (_toMaximize) {
-                if (_newF <= _f) {
-                    if (_f < _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    } else {
-                    }
-                } else {
-                    if (_newF < _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    } else {
-                        memcpy(_params, _newParams, _nParams * sizeof(double));
-                        _f = _newF;
-                    }
-                }
-            } else {
-                if (_newF >= _f) {
-                    if (_f > _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    }
-                } else {
-                    if (_newF > _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    } else {
-                        memcpy(_params, _newParams, _nParams * sizeof(double));
-                        _f = _newF;
-                    }
-                }
-            }
             break;
         }
         //std::cout << _iter << ": newW - w = " << newW - _w << std::endl;
@@ -187,52 +155,58 @@ void LineSearch::optimize() {
         _w = newW;
         newF();
         if (_newF != _newF) {
-            if (_toMaximize) {
-                if (_prevF > _f) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
-                }
-            } else {
-                if (_prevF < _f) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
-                }
-            }
             break;
         }
+
         if (fabs(_w - _v) < 1e-8 || fabs(_w - _u) < 1e-8) {
-            if (_toMaximize) {
-                if (_newF <= _f) {
-                    if (_f < _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    }
+            break;
+        }
+    }
+
+    if (_toMaximize) {
+        if (_newF == _newF) {
+            if (_newF <= _f) {
+                if (_f < _prevF) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
                 } else {
-                    if (_newF < _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    } else {
-                        memcpy(_params, _newParams, _nParams * sizeof(double));
-                        _f = _newF;
-                    }
                 }
             } else {
-                if (_newF >= _f) {
-                    if (_f > _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    }
+                if (_newF < _prevF) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
                 } else {
-                    if (_newF > _prevF) {
-                        memcpy(_params, _prevParams, _nParams * sizeof(double));
-                        _f = _prevF;
-                    } else {
-                        memcpy(_params, _newParams, _nParams * sizeof(double));
-                        _f = _newF;
-                    }
+                    memcpy(_params, _newParams, _nParams * sizeof(double));
+                    _f = _newF;
                 }
             }
-            break;
+        } else {
+            if (_prevF > _f) {
+                memcpy(_params, _prevParams, _nParams * sizeof(double));
+                _f = _prevF;
+            }
+        }
+    } else {
+        if (_newF == _newF) {
+            if (_newF >= _f) {
+                if (_f > _prevF) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
+                }
+            } else {
+                if (_newF > _prevF) {
+                    memcpy(_params, _prevParams, _nParams * sizeof(double));
+                    _f = _prevF;
+                } else {
+                    memcpy(_params, _newParams, _nParams * sizeof(double));
+                    _f = _newF;
+                }
+            }
+        } else {
+            if (_prevF < _f) {
+                memcpy(_params, _prevParams, _nParams * sizeof(double));
+                _f = _prevF;
+            }
         }
     }
 }

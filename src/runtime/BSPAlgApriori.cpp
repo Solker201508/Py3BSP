@@ -15,7 +15,7 @@ Apriori::~Apriori() {
 }
 
 void Apriori::scan1(unsigned long n, unsigned short *x) {
-    std::cout << "scan pass 1 begin" << std::endl;
+    //std::cout << "scan pass 1 begin" << std::endl;
     for (unsigned long i = 0; i < n; ++ i) {
         std::map<unsigned short, unsigned long>::iterator loc = _w1.find(x[i]);
         if (loc != _w1.end()) {
@@ -23,11 +23,11 @@ void Apriori::scan1(unsigned long n, unsigned short *x) {
         } else {
             _w1.insert(std::pair<unsigned short, unsigned long>(x[i], 1));
         }
-        if ((i + 1) % 1000000 == 0) {
-            std::cout << "scan pass 1: " << i + 1 << " completed" << std::endl;
-        }
+        //if ((i + 1) % 1000000 == 0) {
+        //    std::cout << "scan pass 1: " << i + 1 << " completed" << std::endl;
+        //}
     }
-    std::cout << "scan pass 1 done" << std::endl;
+    //std::cout << "scan pass 1 done" << std::endl;
 }
 
 unsigned long key2(unsigned short k0, unsigned short k1) {
@@ -56,8 +56,10 @@ unsigned long long key4(unsigned long long k0, unsigned long long k1) {
         return (unsigned long long)-1;
 }
 
+typedef std::pair< std::map<unsigned short, unsigned long>, std::map<unsigned short, unsigned long> > LR;
+
 void Apriori::scan2(unsigned long n, unsigned short *x) {
-    std::cout << "scan pass 2 begin" << std::endl;
+    //std::cout << "scan pass 2 begin" << std::endl;
     for (unsigned long i = 0; i + 1 < n; ++ i) {
         std::map<unsigned short, unsigned long>::iterator loc0 = _w1.find(x[i]), loc1 = _w1.find(x[i + 1]);
         if (loc0->second > _threshold && loc1->second > _threshold) {
@@ -69,50 +71,58 @@ void Apriori::scan2(unsigned long n, unsigned short *x) {
                 loc->second += 1;
             }
         }
-        if ((i + 1) % 1000000 == 0) {
-            std::cout << "scan pass 2: " << i + 1 << " completed" << std::endl;
+        //if ((i + 1) % 1000000 == 0) {
+            //std::cout << "scan pass 2: " << i + 1 << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 2 calculating boundary entropies" << std::endl;
+    std::map< unsigned short, LR > be;
+    for (std::map<unsigned short, unsigned long>::iterator loc = _w1.begin(); loc != _w1.end(); ++ loc) {
+        if (loc->second > _threshold) {
+            be.insert(std::pair< unsigned short, LR >(loc->first, LR()));
         }
     }
-    std::cout << "scan pass 2 calculating boundary entropies" << std::endl;
     unsigned long kBE = 0;
-    for (std::map<unsigned short, unsigned long>::iterator loc0 = _w1.begin(); loc0 != _w1.end(); ++ loc0, ++ kBE) {
-        std::map<unsigned short, unsigned long> left, right;
-        std::map<unsigned long, unsigned long>::iterator loc;
-        unsigned long sumLeft = 0, sumRight = 0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = _w1.begin(); loc1 != _w1.end(); ++ loc1) {
-            if (loc0->first == loc1->first)
-                continue;
-            if (loc0->second > _threshold && loc1->second > _threshold) {
-                loc = _w2.find(key2(loc0->first, loc1->first));
-                if (loc != _w2.end()) {
-                    right[loc1->first] = loc->second;
-                    sumRight += loc->second;
-                }
-
-                loc = _w2.find(key2(loc1->first, loc0->first));
-                if (loc != _w2.end()) {
-                    left[loc1->first] = loc->second;
-                    sumLeft += loc->second;
-                }
-            }
-        }
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = left.begin(); loc1 != left.end(); ++ loc1) {
-            double p = loc1->second / (double) sumLeft;
-            leftEntropy -= p * log(p);
-        }
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = right.begin(); loc1 != right.end(); ++ loc1) {
-            double p = loc1->second / (double) sumRight;
-            rightEntropy -= p * log(p);
-        }
-        _bel1[loc0->first] = leftEntropy;
-        _ber1[loc0->first] = rightEntropy;
-        if ((kBE + 1) % 100 == 0) {
-            std::cout << "scan pass 2 BE: " << kBE + 1 << " of " << _w1.size() << " completed" << std::endl;
-        }
+    for (std::map<unsigned long, unsigned long>::iterator loc = _w2.begin(); loc != _w2.end(); ++ loc, ++kBE) {
+        unsigned short key1 = loc->first & ((1 << 16) - 1);
+        unsigned short key2 = loc->first >> 16;
+        be[key1].second[key2] = loc->second;
+        be[key2].first[key1] = loc->second;
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 2 scan BE: " << kBE + 1 << " of " << _w2.size() << " completed" << std::endl;
+        //}
     }
-    std::cout << "scan pass 2 done" << std::endl;
+
+    kBE = 0;
+    for (std::map<unsigned short, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+        double leftSum = 0.0;
+        double leftEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                loc1 != loc->second.first.end(); ++ loc1) {
+            leftEntropy -= loc1->second * log(loc1->second);
+            leftSum += loc1->second;
+        }
+        if (leftSum > 0)
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+        double rightSum = 0.0;
+        double rightEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                loc2 != loc->second.second.end(); ++ loc2) {
+            rightEntropy -= loc2->second * log(loc2->second);
+            rightSum += loc2->second;
+        }
+        if (rightSum)
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+
+        _bel1[loc->first] = leftEntropy;
+        _ber1[loc->first] = rightEntropy;
+
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 2 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 2 done" << std::endl;
 }
 
 void Apriori::scan2(unsigned long n, int pos1, int pos2, unsigned short *x) {
@@ -138,7 +148,7 @@ void Apriori::scan2(unsigned long n, int pos1, int pos2, unsigned short *x) {
 }
 
 void Apriori::scan3(unsigned long n, unsigned short *x) {
-    std::cout << "scan pass 3 begin" << std::endl;
+    //std::cout << "scan pass 3 begin" << std::endl;
     for (unsigned long i = 0; i + 2 < n; ++ i) {
         std::map<unsigned long, unsigned long>::iterator loc0 = _w2.find(key2(x[i],x[i + 1])), 
             loc1 = _w2.find(key2(x[i + 1], x[i + 2]));
@@ -151,50 +161,58 @@ void Apriori::scan3(unsigned long n, unsigned short *x) {
                 loc->second += 1;
             }
         }
-        if ((i + 1) % 1000000 == 0) {
-            std::cout << "scan pass 3: " << i + 1 << " completed" << std::endl;
+        //if ((i + 1) % 1000000 == 0) {
+            //std::cout << "scan pass 3: " << i + 1 << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 3 calculating boundary entropies" << std::endl;
+    std::map< unsigned long, LR > be;
+    for (std::map<unsigned long, unsigned long>::iterator loc = _w2.begin(); loc != _w2.end(); ++ loc) {
+        if (loc->second > _threshold) {
+            be.insert(std::pair< unsigned long, LR >(loc->first, LR()));
         }
     }
-    std::cout << "scan pass 3 calculating boundary entropies" << std::endl;
     unsigned long kBE = 0;
-    for (std::map<unsigned long, unsigned long>::iterator loc0 = _w2.begin(); loc0 != _w2.end(); ++ loc0, ++ kBE) {
-        std::map<unsigned short, unsigned long> left, right;
-        std::map<unsigned long long, unsigned long>::iterator loc;
-        unsigned long sumLeft = 0, sumRight = 0;
-        for (std::map<unsigned long, unsigned long>::iterator loc1 = _w2.begin(); loc1 != _w2.end(); ++ loc1) {
-            if (loc0->first == loc1->first)
-                continue;
-            if (loc0->second > _threshold && loc1->second > _threshold) {
-                loc = _w3.find(key3(loc0->first, loc1->first));
-                if (loc != _w3.end()) {
-                    right[loc1->first >> 16] = loc->second;
-                    sumRight += loc->second;
-                }
-
-                loc = _w3.find(key3(loc1->first, loc0->first));
-                if (loc != _w3.end()) {
-                    left[loc1->first & ((1 << 16) - 1)] = loc->second;
-                    sumLeft += loc->second;
-                }
-            }
-        }
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = left.begin(); loc1 != left.end(); ++ loc1) {
-            double p = loc1->second / (double) sumLeft;
-            leftEntropy -= p * log(p);
-        }
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = right.begin(); loc1 != right.end(); ++ loc1) {
-            double p = loc1->second / (double) sumRight;
-            rightEntropy -= p * log(p);
-        }
-        _bel2[loc0->first] = leftEntropy;
-        _ber2[loc0->first] = rightEntropy;
-        if ((kBE + 1) % 100 == 0) {
-            std::cout << "scan pass 3 BE: " << kBE + 1 << " of " << _w2.size() << " completed" << std::endl;
-        }
+    for (std::map<unsigned long long, unsigned long>::iterator loc = _w3.begin(); loc != _w3.end(); ++ loc, ++kBE) {
+        unsigned long key1 = loc->first & ((1ULL << 32) - 1);
+        unsigned long key2 = loc->first >> 16;
+        be[key1].second[key2 >> 16] = loc->second;
+        be[key2].first[key1 & ((1 << 16) - 1)] = loc->second;
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 3 scan BE: " << kBE + 1 << " of " << _w3.size() << " completed" << std::endl;
+        //}
     }
-    std::cout << "scan pass 3 done" << std::endl;
+
+    kBE = 0;
+    for (std::map<unsigned long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+        double leftSum = 0.0;
+        double leftEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                loc1 != loc->second.first.end(); ++ loc1) {
+            leftEntropy -= loc1->second * log(loc1->second);
+            leftSum += loc1->second;
+        }
+        if (leftSum > 0)
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+        double rightSum = 0.0;
+        double rightEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                loc2 != loc->second.second.end(); ++ loc2) {
+            rightEntropy -= loc2->second * log(loc2->second);
+            rightSum += loc2->second;
+        }
+        if (rightSum > 0)
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+
+        _bel2[loc->first] = leftEntropy;
+        _ber2[loc->first] = rightEntropy;
+
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 3 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 3 done" << std::endl;
 }
 
 void Apriori::scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x) {
@@ -220,7 +238,7 @@ void Apriori::scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned shor
 }
 
 void Apriori::scan4(unsigned long n, unsigned short *x) {
-    std::cout << "scan pass 4 begin" << std::endl;
+    //std::cout << "scan pass 4 begin" << std::endl;
     for (unsigned long i = 0; i + 3 < n; ++ i) {
         std::map<unsigned long long, unsigned long>::iterator loc0 = _w3.find(key3(x[i], x[i + 1], x[i + 2])), 
             loc1 = _w3.find(key3(x[i + 1], x[i + 2], x[i + 3]));
@@ -233,54 +251,62 @@ void Apriori::scan4(unsigned long n, unsigned short *x) {
                 loc->second += 1;
             }
         }
-        if ((i + 1) % 1000000 == 0) {
-            std::cout << "scan pass 4: " << i + 1 << " completed" << std::endl;
+        //if ((i + 1) % 1000000 == 0) {
+            //std::cout << "scan pass 4: " << i + 1 << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 4 calculating boundary entropies" << std::endl;
+    std::map< unsigned long long, LR > be;
+    for (std::map<unsigned long long, unsigned long>::iterator loc = _w3.begin(); loc != _w3.end(); ++ loc) {
+        if (loc->second > _threshold) {
+            be.insert(std::pair< unsigned long long, LR >(loc->first, LR()));
         }
     }
-    std::cout << "scan pass 4 calculating boundary entropies" << std::endl;
     unsigned long kBE = 0;
-    for (std::map<unsigned long long, unsigned long>::iterator loc0 = _w3.begin(); loc0 != _w3.end(); ++ loc0, ++ kBE) {
-        std::map<unsigned short, unsigned long> left, right;
-        std::map<unsigned long long, unsigned long>::iterator loc;
-        unsigned long sumLeft = 0, sumRight = 0;
-        for (std::map<unsigned long long, unsigned long>::iterator loc1 = _w3.begin(); loc1 != _w3.end(); ++ loc1) {
-            if (loc0->first == loc1->first)
-                continue;
-            if (loc0->second > _threshold && loc1->second > _threshold) {
-                loc = _w4.find(key4(loc0->first, loc1->first));
-                if (loc != _w4.end()) {
-                    right[loc1->first >> 32] = loc->second;
-                    sumRight += loc->second;
-                }
-
-                loc = _w4.find(key4(loc1->first, loc0->first));
-                if (loc != _w4.end()) {
-                    left[loc1->first & ((1 << 16) - 1)] = loc->second;
-                    sumLeft += loc->second;
-                }
-            }
-        }
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = left.begin(); loc1 != left.end(); ++ loc1) {
-            double p = loc1->second / (double) sumLeft;
-            leftEntropy -= p * log(p);
-        }
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = right.begin(); loc1 != right.end(); ++ loc1) {
-            double p = loc1->second / (double) sumRight;
-            rightEntropy -= p * log(p);
-        }
-        _bel3[loc0->first] = leftEntropy;
-        _ber3[loc0->first] = rightEntropy;
-        if ((kBE + 1) % 100 == 0) {
-            std::cout << "scan pass 4 BE: " << kBE + 1 << " of " << _w3.size() << " completed" << std::endl;
-        }
+    for (std::map<unsigned long long, unsigned long>::iterator loc = _w4.begin(); loc != _w4.end(); ++ loc, ++kBE) {
+        unsigned long key1 = loc->first & ((1ULL << 48) - 1);
+        unsigned long key2 = loc->first >> 16;
+        be[key1].second[key2 >> 32] = loc->second;
+        be[key2].first[key1 & ((1 << 16) - 1)] = loc->second;
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 4 scan BE: " << kBE + 1 << " of " << _w4.size() << " completed" << std::endl;
+        //}
     }
+
+    kBE = 0;
+    for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+        double leftSum = 0.0;
+        double leftEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                loc1 != loc->second.first.end(); ++ loc1) {
+            leftEntropy -= loc1->second * log(loc1->second);
+            leftSum += loc1->second;
+        }
+        if (leftSum > 0)
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+        double rightSum = 0.0;
+        double rightEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                loc2 != loc->second.second.end(); ++ loc2) {
+            rightEntropy -= loc2->second * log(loc2->second);
+            rightSum += loc2->second;
+        }
+        if (rightSum > 0)
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+
+        _bel3[loc->first] = leftEntropy;
+        _ber3[loc->first] = rightEntropy;
+
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+        //}
+    }
+    //std::cout << "scan pass 4 done" << std::endl;
 
     // bel4, ber4
-    std::cout << "scan pass 4 finalizing ... " << std::endl;
-    typedef std::pair< std::map<unsigned short, unsigned long>, std::map<unsigned short, unsigned long> > LR;
-    std::map< unsigned long long, LR > be;
+    //std::cout << "scan pass 5 begin" << std::endl;
+    be.clear();
     for (std::map<unsigned long long, unsigned long>::iterator loc = _w4.begin(); loc != _w4.end(); ++ loc) {
         be.insert(std::pair< unsigned long long, LR >(loc->first, LR()));
     }
@@ -305,8 +331,13 @@ void Apriori::scan4(unsigned long n, unsigned short *x) {
                 loc->second.second[x[i - 1]] = 1;
             }
         }
+        //if ((i + 1) % 1000000 == 0) {
+            //std::cout << "scan pass 5: " << i + 1 << " completed" << std::endl;
+        //}
     }
-    for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc) {
+    //std::cout << "scan pass 5 calculating boundary entropies" << std::endl;
+    kBE = 0;
+    for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
         double leftSum = 0.0;
         double leftEntropy = 0.0;
         for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
@@ -327,8 +358,10 @@ void Apriori::scan4(unsigned long n, unsigned short *x) {
 
         _bel4[loc->first] = leftEntropy;
         _ber4[loc->first] = rightEntropy;
+        //if ((kBE + 1) % 10000 == 0) {
+            //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+        //}
     }
-    std::cout << "scan pass 4 done" << std::endl;
 }
 
 void Apriori::scan4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x) {
@@ -679,7 +712,7 @@ void Apriori::saveToFile(char *fileName) {
             ++ k;
         }
         assert(n[9] == fwrite(keyW3, sizeof(keyW3[0]), n[9], f));
-        assert(n[0] == fwrite(valW3, sizeof(valW3[0]), n[9], f));
+        assert(n[9] == fwrite(valW3, sizeof(valW3[0]), n[9], f));
         delete[] keyW3;
         delete[] valW3;
     }
