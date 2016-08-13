@@ -5,12 +5,11 @@
 #include <cassert>
 #include <string>
 #include <sstream>
-#include <chrono>
 #include <map>
+#include <sys/time.h>
 
 using namespace BSP;
 using namespace BSP::Algorithm;
-using namespace std::chrono;
 PyObject *pickle_ = NULL;
 PyObject *ctypes_ = NULL;
 PyObject *pickle_dumps_ = NULL;
@@ -23,7 +22,7 @@ uint64_t nProcs_ = 0;
 std::map<IndexSet *, int> indexSetToID_;
 std::map<int, IndexSet *> idToIndexSet_;
 IndexSet *activeIndexSet_ = NULL;
-high_resolution_clock::time_point tStart_, tStop_;
+struct timeval tvStart_, tvStop_;
 
 Runtime *runtime_ = NULL;
 
@@ -1510,14 +1509,14 @@ extern "C" {
 
     // bsp.tic()
     static PyObject *bsp_tic(PyObject *self, PyObject *args) {
-        tStart_ = high_resolution_clock::now();
+        gettimeofday(&tvStart_, NULL);
 	Py_RETURN_NONE;
     }
 
     // bsp.toc()
     static PyObject *bsp_toc(PyObject *self, PyObject *args) {
-        tStop_ = high_resolution_clock::now();
-        double result = duration<double, std::milli>(tStop_ - tStart_).count();
+        gettimeofday(&tvStop_, NULL);
+        double result = tvStop_.tv_sec - tvStart_.tv_sec + 1e-6 * (tvStop_.tv_usec - tvStart_.tv_usec);
         return Py_BuildValue("d",result);
     }
 
