@@ -30,6 +30,7 @@
 #include "BSPLocalRequestRegionTensor.hpp"
 #include "BSPIndexSet.hpp"
 #include "BSPRuntime.hpp"
+#include <iostream>
 
 using namespace BSP;
 Runtime *Runtime::_activeRuntimeObject = NULL;

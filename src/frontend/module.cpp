@@ -6,6 +6,7 @@
 #include <string>
 #include <sstream>
 #include <map>
+#include <iostream>
 #include <sys/time.h>
 
 using namespace BSP;
@@ -1841,13 +1842,13 @@ extern "C" {
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
     static PyObject *bsp_findFreqSet(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"sequence", "fileName", "threshold", "tmpl2", "tmpl3", NULL};
+        static const char * kwlist[] = {"sequence", "fileName", "threshold", "tmpl2", "tmpl3", "multiThread", NULL};
         PyObject *objSeq = NULL;
         char *strFileName = NULL;
         unsigned long threshold = 2;
-        int t20 = 0, t21 = 0, t30 = 0, t31 = 0, t32 = 0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "Os|k(ii)(iii): bsp.findFreqSet", (char **)kwlist,
-                &objSeq, &strFileName, &threshold, &t20, &t21, &t30, &t31, &t32);
+        int t20 = 0, t21 = 0, t30 = 0, t31 = 0, t32 = 0, multiThread = 1;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "Os|k(ii)(iii)i: bsp.findFreqSet", (char **)kwlist,
+                &objSeq, &strFileName, &threshold, &t20, &t21, &t30, &t31, &t32, &multiThread);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.findFreqSet(sequence, fileName, threshold, optTemplate)");
             Py_RETURN_FALSE;
@@ -1893,7 +1894,7 @@ extern "C" {
         } else if (useTmpl3) {
             apriori.scan(nUnits, t30, t31, t32, x);
         } else {
-            apriori.scan(nUnits, x);
+            apriori.scan(nUnits, x, multiThread != 0);
         }
         Py_XDECREF(objSeq);
         apriori.saveToFile(strFileName);

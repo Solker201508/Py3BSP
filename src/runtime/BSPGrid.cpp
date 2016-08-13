@@ -6,6 +6,7 @@
  */
 #include "BSPGrid.hpp"
 #include "BSPRuntime.hpp"
+#include <iostream>
 
 using namespace BSP;
 
@@ -91,7 +92,7 @@ void Grid::operator=(const Grid& grid) {
 }
 
 bool Grid::operator ==(const Grid& grid) const {
-    std::cout << "comparing grids" << std::endl;
+    //std::cout << "comparing grids" << std::endl;
     if (_nDims != grid._nDims)
         return false;
     if (_startProcID != grid._startProcID)

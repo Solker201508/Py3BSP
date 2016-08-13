@@ -4,6 +4,8 @@
 #include <iostream>
 #include <cmath>
 #include <cstdio>
+#include <pthread.h>
+#include <unistd.h>
 
 using namespace BSP::Algorithm;
 
@@ -14,20 +16,66 @@ Apriori::Apriori(unsigned int threshold) {
 Apriori::~Apriori() {
 }
 
-void Apriori::scan1(unsigned long n, unsigned short *x) {
-    //std::cout << "scan pass 1 begin" << std::endl;
-    for (unsigned long i = 0; i < n; ++ i) {
-        std::map<unsigned short, unsigned long>::iterator loc = _w1.find(x[i]);
-        if (loc != _w1.end()) {
+class ArgScan1: public std::map<unsigned short, unsigned long> {
+    public:
+        unsigned short *_x;
+        unsigned long _i0, _i1;
+};
+
+void *threadScan1(void *pArgs) {
+    ArgScan1 *myArg =  (ArgScan1 *)pArgs;
+    std::map<unsigned short, unsigned long> &w1 = *myArg;
+    unsigned short *x = myArg->_x;
+    for (unsigned long i = myArg->_i0; i < myArg->_i1; ++ i) {
+        std::map<unsigned short, unsigned long>::iterator loc = w1.find(x[i]);
+        if (loc != w1.end()) {
             loc->second += 1;
         } else {
-            _w1.insert(std::pair<unsigned short, unsigned long>(x[i], 1));
+            w1.insert(std::pair<unsigned short, unsigned long>(x[i], 1));
         }
-        //if ((i + 1) % 1000000 == 0) {
-        //    std::cout << "scan pass 1: " << i + 1 << " completed" << std::endl;
-        //}
     }
-    //std::cout << "scan pass 1 done" << std::endl;
+    return NULL;
+}
+
+void Apriori::scan1(unsigned long n, unsigned short *x, bool multiThread) {
+    //std::cout << "scan 1 begin" << std::endl;
+    if (n >= 1024 && multiThread) {
+        int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+        ArgScan1 *args = new ArgScan1[nThreads];
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._x = x;
+            args[iThread]._i0 = iThread * n / nThreads;
+            args[iThread]._i1 = (iThread + 1) * n / nThreads;
+            pthread_create(threads + iThread, NULL, threadScan1, args + iThread);
+        }
+        //std::cout << "args ready" << std::endl;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned short, unsigned long>::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                std::map<unsigned short, unsigned long>::iterator loc1 = _w1.find(loc->first);
+                if (loc1 == _w1.end()) {
+                    _w1.insert(std::pair<unsigned short, unsigned long>(loc->first, loc->second));
+                } else {
+                    loc1->second += loc->second;
+                }
+            }
+        }
+        delete[] args;
+        delete[] threads;
+    } else {
+        for (unsigned long i = 0; i < n; ++ i) {
+            std::map<unsigned short, unsigned long>::iterator loc = _w1.find(x[i]);
+            if (loc != _w1.end()) {
+                loc->second += 1;
+            } else {
+                _w1.insert(std::pair<unsigned short, unsigned long>(x[i], 1));
+            }
+        }
+    }
+    //std::cout << "w1 size = " << _w1.size() << std::endl;
+    //std::cout << "scan 1 end" << std::endl;
 }
 
 unsigned long key2(unsigned short k0, unsigned short k1) {
@@ -58,43 +106,43 @@ unsigned long long key4(unsigned long long k0, unsigned long long k1) {
 
 typedef std::pair< std::map<unsigned short, unsigned long>, std::map<unsigned short, unsigned long> > LR;
 
-void Apriori::scan2(unsigned long n, unsigned short *x) {
-    //std::cout << "scan pass 2 begin" << std::endl;
-    for (unsigned long i = 0; i + 1 < n; ++ i) {
-        std::map<unsigned short, unsigned long>::iterator loc0 = _w1.find(x[i]), loc1 = _w1.find(x[i + 1]);
-        if (loc0->second > _threshold && loc1->second > _threshold) {
+class ArgScan2: public std::map<unsigned long, unsigned long> {
+    public:
+        std::map<unsigned short, unsigned long> *_w1;
+        unsigned short *_x;
+        unsigned long _i0, _i1;
+        unsigned long _threshold;
+};
+
+void *threadScan2(void *pArgs) {
+    ArgScan2 *myArg =  (ArgScan2 *)pArgs;
+    std::map<unsigned short, unsigned long> &w1 = *myArg->_w1;
+    std::map<unsigned long, unsigned long> &w2 = *myArg;
+    unsigned short *x = myArg->_x;
+    unsigned long threshold = myArg->_threshold;
+    for (unsigned long i = myArg->_i0; i < myArg->_i1; ++ i) {
+        std::map<unsigned short, unsigned long>::iterator loc0 = w1.find(x[i]), loc1 = w1.find(x[i + 1]);
+        if (loc0->second > threshold && loc1->second > threshold) {
             unsigned long key = key2(x[i], x[i + 1]);
-            std::map<unsigned long, unsigned long>::iterator loc = _w2.find(key);
-            if (loc == _w2.end()) {
-                _w2.insert(std::pair<unsigned long, unsigned long>(key, 1));
+            std::map<unsigned long, unsigned long>::iterator loc = w2.find(key);
+            if (loc == w2.end()) {
+                w2.insert(std::pair<unsigned long, unsigned long>(key, 1));
             } else {
                 loc->second += 1;
             }
         }
-        //if ((i + 1) % 1000000 == 0) {
-            //std::cout << "scan pass 2: " << i + 1 << " completed" << std::endl;
-        //}
     }
-    //std::cout << "scan pass 2 calculating boundary entropies" << std::endl;
-    std::map< unsigned short, LR > be;
-    for (std::map<unsigned short, unsigned long>::iterator loc = _w1.begin(); loc != _w1.end(); ++ loc) {
-        if (loc->second > _threshold) {
-            be.insert(std::pair< unsigned short, LR >(loc->first, LR()));
-        }
-    }
-    unsigned long kBE = 0;
-    for (std::map<unsigned long, unsigned long>::iterator loc = _w2.begin(); loc != _w2.end(); ++ loc, ++kBE) {
-        unsigned short key1 = loc->first & ((1 << 16) - 1);
-        unsigned short key2 = loc->first >> 16;
-        be[key1].second[key2] = loc->second;
-        be[key2].first[key1] = loc->second;
-        //if ((kBE + 1) % 10000 == 0) {
-            //std::cout << "scan pass 2 scan BE: " << kBE + 1 << " of " << _w2.size() << " completed" << std::endl;
-        //}
-    }
+    return NULL;
+}
 
-    kBE = 0;
-    for (std::map<unsigned short, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+class ArgBE1: public std::map< unsigned short, std::pair<double, double> > {
+    public:
+        std::map<unsigned short, LR>::iterator _locBegin, _locEnd;
+};
+
+void *threadBE1(void *pArgs) {
+    ArgBE1 *myArg = (ArgBE1 *)pArgs;
+    for (std::map<unsigned short, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
         double leftSum = 0.0;
         double leftEntropy = 0.0;
         for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
@@ -114,13 +162,127 @@ void Apriori::scan2(unsigned long n, unsigned short *x) {
         }
         if (rightSum)
             rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        myArg->insert(std::pair< unsigned short, std::pair<double, double> >(loc->first, 
+                    std::pair<double, double>(leftEntropy, rightEntropy)));
+    }
+    return NULL;
+}
 
-        _bel1[loc->first] = leftEntropy;
-        _ber1[loc->first] = rightEntropy;
+void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
+    //std::cout << "scan 2 begin" << std::endl;
+    int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n >= 1024 && multiThread) {
+        ArgScan2 *args = new ArgScan2[nThreads];
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._w1 = &_w1;
+            args[iThread]._threshold = _threshold;
+            args[iThread]._x = x;
+            args[iThread]._i0 = iThread * (n - 1) / nThreads;
+            args[iThread]._i1 = (iThread + 1) * (n - 1) / nThreads;
+            pthread_create(threads + iThread, NULL, threadScan2, args + iThread);
+        }
+        //std::cout << "args ready" << std::endl;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long, unsigned long>::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                std::map<unsigned long, unsigned long>::iterator loc1 = _w2.find(loc->first);
+                if (loc1 == _w2.end()) {
+                    _w2.insert(std::pair<unsigned long, unsigned long>(loc->first, loc->second));
+                } else {
+                    loc1->second += loc->second;
+                }
+            }
+        }
+        delete[] args;
+        delete[] threads;
+    } else {
+        for (unsigned long i = 0; i + 1 < n; ++ i) {
+            std::map<unsigned short, unsigned long>::iterator loc0 = _w1.find(x[i]), loc1 = _w1.find(x[i + 1]);
+            if (loc0->second > _threshold && loc1->second > _threshold) {
+                unsigned long key = key2(x[i], x[i + 1]);
+                std::map<unsigned long, unsigned long>::iterator loc = _w2.find(key);
+                if (loc == _w2.end()) {
+                    _w2.insert(std::pair<unsigned long, unsigned long>(key, 1));
+                } else {
+                    loc->second += 1;
+                }
+            }
+        }
+    }
+    //std::cout << "w2 size = " << _w2.size() << std::endl;
+    //std::cout << "scan 2 end" << std::endl;
 
+    //std::cout << "scan pass 2 begin" << std::endl;
+    //std::cout << "scan pass 2 calculating boundary entropies" << std::endl;
+    std::map< unsigned short, LR > be;
+    for (std::map<unsigned short, unsigned long>::iterator loc = _w1.begin(); loc != _w1.end(); ++ loc) {
+        if (loc->second > _threshold) {
+            be.insert(std::pair< unsigned short, LR >(loc->first, LR()));
+        }
+    }
+    unsigned long kBE = 0;
+    for (std::map<unsigned long, unsigned long>::iterator loc = _w2.begin(); loc != _w2.end(); ++ loc, ++kBE) {
+        unsigned short key1 = loc->first & ((1 << 16) - 1);
+        unsigned short key2 = loc->first >> 16;
+        be[key1].second[key2] = loc->second;
+        be[key2].first[key1] = loc->second;
         //if ((kBE + 1) % 10000 == 0) {
-            //std::cout << "scan pass 2 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+            //std::cout << "scan pass 2 scan BE: " << kBE + 1 << " of " << _w2.size() << " completed" << std::endl;
         //}
+    }
+
+    if (be.size() >= 1024 && multiThread) {
+        ArgBE1 *args = new ArgBE1[nThreads];
+        kBE = 0;
+        std::map<unsigned short, LR>::iterator loc = be.begin();
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._locBegin = loc;
+            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
+            for (;kBE < kBEStop; ++ kBE)
+                ++ loc;
+            args[iThread]._locEnd = loc;
+            pthread_create(threads + iThread, NULL, threadBE1, args + iThread);
+        }
+
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned short, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                _bel1[loc->first] = loc->second.first;
+                _ber1[loc->first] = loc->second.second;
+            }
+        }
+        delete[] args;
+        delete[] threads;
+    } else {
+        kBE = 0;
+        for (std::map<unsigned short, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+            double leftSum = 0.0;
+            double leftEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                    loc1 != loc->second.first.end(); ++ loc1) {
+                leftEntropy -= loc1->second * log(loc1->second);
+                leftSum += loc1->second;
+            }
+            if (leftSum > 0)
+                leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+            double rightSum = 0.0;
+            double rightEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                    loc2 != loc->second.second.end(); ++ loc2) {
+                rightEntropy -= loc2->second * log(loc2->second);
+                rightSum += loc2->second;
+            }
+            if (rightSum)
+                rightEntropy = log(rightSum) - rightEntropy / rightSum;
+
+            _bel1[loc->first] = leftEntropy;
+            _ber1[loc->first] = rightEntropy;
+        }
     }
     //std::cout << "scan pass 2 done" << std::endl;
 }
@@ -147,24 +309,116 @@ void Apriori::scan2(unsigned long n, int pos1, int pos2, unsigned short *x) {
     }
 }
 
-void Apriori::scan3(unsigned long n, unsigned short *x) {
-    //std::cout << "scan pass 3 begin" << std::endl;
-    for (unsigned long i = 0; i + 2 < n; ++ i) {
-        std::map<unsigned long, unsigned long>::iterator loc0 = _w2.find(key2(x[i],x[i + 1])), 
-            loc1 = _w2.find(key2(x[i + 1], x[i + 2]));
-        if (loc0->second > _threshold && loc1->second > _threshold) {
+class ArgScan3: public std::map<unsigned long long, unsigned long> {
+    public:
+        std::map<unsigned long, unsigned long> *_w2;
+        unsigned short *_x;
+        unsigned long _i0, _i1;
+        unsigned long _threshold;
+};
+
+void *threadScan3(void *pArgs) {
+    ArgScan3 *myArg =  (ArgScan3 *)pArgs;
+    std::map<unsigned long, unsigned long> &w2 = *myArg->_w2;
+    std::map<unsigned long long, unsigned long> &w3 = *myArg;
+    unsigned short *x = myArg->_x;
+    unsigned long threshold = myArg->_threshold;
+    for (unsigned long i = myArg->_i0; i < myArg->_i1; ++ i) {
+        std::map<unsigned long, unsigned long>::iterator loc0 = w2.find(key2(x[i],x[i + 1])), 
+            loc1 = w2.find(key2(x[i + 1], x[i + 2]));
+        if (loc0->second > threshold && loc1->second > threshold) {
             unsigned long long key = key3(x[i], x[i + 1], x[i + 2]);
-            std::map<unsigned long long, unsigned long>::iterator loc = _w3.find(key);
-            if (loc == _w3.end()) {
-                _w3.insert(std::pair<unsigned long long, unsigned long>(key, 1));
+            std::map<unsigned long long, unsigned long>::iterator loc = w3.find(key);
+            if (loc == w3.end()) {
+                w3.insert(std::pair<unsigned long long, unsigned long>(key, 1));
             } else {
                 loc->second += 1;
             }
         }
-        //if ((i + 1) % 1000000 == 0) {
-            //std::cout << "scan pass 3: " << i + 1 << " completed" << std::endl;
-        //}
     }
+    return NULL;
+}
+
+class ArgBE2: public std::map< unsigned long, std::pair<double, double> > {
+    public:
+        std::map<unsigned long, LR>::iterator _locBegin, _locEnd;
+};
+
+void *threadBE2(void *pArgs) {
+    ArgBE2 *myArg = (ArgBE2 *)pArgs;
+    for (std::map<unsigned long, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
+        double leftSum = 0.0;
+        double leftEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                loc1 != loc->second.first.end(); ++ loc1) {
+            leftEntropy -= loc1->second * log(loc1->second);
+            leftSum += loc1->second;
+        }
+        if (leftSum > 0)
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+        double rightSum = 0.0;
+        double rightEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                loc2 != loc->second.second.end(); ++ loc2) {
+            rightEntropy -= loc2->second * log(loc2->second);
+            rightSum += loc2->second;
+        }
+        if (rightSum)
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        myArg->insert(std::pair< unsigned long, std::pair<double, double> >(loc->first, 
+                    std::pair<double, double>(leftEntropy, rightEntropy)));
+    }
+    return NULL;
+}
+
+void Apriori::scan3(unsigned long n, unsigned short *x, bool multiThread) {
+    //std::cout << "scan pass 3 begin" << std::endl;
+    //std::cout << "scan 3 begin" << std::endl;
+    int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n >= 1024 && multiThread) {
+        ArgScan3 *args = new ArgScan3[nThreads];
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._w2 = &_w2;
+            args[iThread]._threshold = _threshold;
+            args[iThread]._x = x;
+            args[iThread]._i0 = iThread * (n - 2) / nThreads;
+            args[iThread]._i1 = (iThread + 1) * (n - 2) / nThreads;
+            pthread_create(threads + iThread, NULL, threadScan3, args + iThread);
+        }
+        //std::cout << "args ready" << std::endl;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long long, unsigned long>::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                std::map<unsigned long long, unsigned long>::iterator loc1 = _w3.find(loc->first);
+                if (loc1 == _w3.end()) {
+                    _w3.insert(std::pair<unsigned long, unsigned long>(loc->first, loc->second));
+                } else {
+                    loc1->second += loc->second;
+                }
+            }
+        }
+        delete[] args;
+        delete[] threads;
+    } else {
+        for (unsigned long i = 0; i + 2 < n; ++ i) {
+            std::map<unsigned long, unsigned long>::iterator loc0 = _w2.find(key2(x[i],x[i + 1])), 
+                loc1 = _w2.find(key2(x[i + 1], x[i + 2]));
+            if (loc0->second > _threshold && loc1->second > _threshold) {
+                unsigned long long key = key3(x[i], x[i + 1], x[i + 2]);
+                std::map<unsigned long long, unsigned long>::iterator loc = _w3.find(key);
+                if (loc == _w3.end()) {
+                    _w3.insert(std::pair<unsigned long long, unsigned long>(key, 1));
+                } else {
+                    loc->second += 1;
+                }
+            }
+        }
+    }
+    //std::cout << "w3 size = " << _w3.size() << std::endl;
+    //std::cout << "scan 3 end" << std::endl;
     //std::cout << "scan pass 3 calculating boundary entropies" << std::endl;
     std::map< unsigned long, LR > be;
     for (std::map<unsigned long, unsigned long>::iterator loc = _w2.begin(); loc != _w2.end(); ++ loc) {
@@ -183,34 +437,60 @@ void Apriori::scan3(unsigned long n, unsigned short *x) {
         //}
     }
 
-    kBE = 0;
-    for (std::map<unsigned long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
-        double leftSum = 0.0;
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
-            leftEntropy -= loc1->second * log(loc1->second);
-            leftSum += loc1->second;
+    if (be.size() >= 1024 && multiThread) {
+        ArgBE2 *args = new ArgBE2[nThreads];
+        kBE = 0;
+        std::map<unsigned long, LR>::iterator loc = be.begin();
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._locBegin = loc;
+            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
+            for (;kBE < kBEStop; ++ kBE)
+                ++ loc;
+            args[iThread]._locEnd = loc;
+            pthread_create(threads + iThread, NULL, threadBE2, args + iThread);
         }
-        if (leftSum > 0)
-            leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        double rightSum = 0.0;
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
-            rightEntropy -= loc2->second * log(loc2->second);
-            rightSum += loc2->second;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                _bel2[loc->first] = loc->second.first;
+                _ber2[loc->first] = loc->second.second;
+            }
         }
-        if (rightSum > 0)
-            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        delete[] args;
+        delete[] threads;
+    } else {
+        kBE = 0;
+        for (std::map<unsigned long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+            double leftSum = 0.0;
+            double leftEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                    loc1 != loc->second.first.end(); ++ loc1) {
+                leftEntropy -= loc1->second * log(loc1->second);
+                leftSum += loc1->second;
+            }
+            if (leftSum > 0)
+                leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        _bel2[loc->first] = leftEntropy;
-        _ber2[loc->first] = rightEntropy;
+            double rightSum = 0.0;
+            double rightEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                    loc2 != loc->second.second.end(); ++ loc2) {
+                rightEntropy -= loc2->second * log(loc2->second);
+                rightSum += loc2->second;
+            }
+            if (rightSum > 0)
+                rightEntropy = log(rightSum) - rightEntropy / rightSum;
 
-        //if ((kBE + 1) % 10000 == 0) {
-            //std::cout << "scan pass 3 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
-        //}
+            _bel2[loc->first] = leftEntropy;
+            _ber2[loc->first] = rightEntropy;
+
+            //if ((kBE + 1) % 10000 == 0) {
+                //std::cout << "scan pass 3 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+            //}
+        }
     }
     //std::cout << "scan pass 3 done" << std::endl;
 }
@@ -237,24 +517,116 @@ void Apriori::scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned shor
     }
 }
 
-void Apriori::scan4(unsigned long n, unsigned short *x) {
-    //std::cout << "scan pass 4 begin" << std::endl;
-    for (unsigned long i = 0; i + 3 < n; ++ i) {
-        std::map<unsigned long long, unsigned long>::iterator loc0 = _w3.find(key3(x[i], x[i + 1], x[i + 2])), 
-            loc1 = _w3.find(key3(x[i + 1], x[i + 2], x[i + 3]));
-        if (loc0->second > _threshold && loc1->second > _threshold) {
+class ArgScan4: public std::map<unsigned long long, unsigned long> {
+    public:
+        std::map<unsigned long long, unsigned long> *_w3;
+        unsigned short *_x;
+        unsigned long _i0, _i1;
+        unsigned long _threshold;
+};
+
+void *threadScan4(void *pArgs) {
+    ArgScan4 *myArg =  (ArgScan4 *)pArgs;
+    std::map<unsigned long long, unsigned long> &w3 = *myArg->_w3;
+    std::map<unsigned long long, unsigned long> &w4 = *myArg;
+    unsigned short *x = myArg->_x;
+    unsigned long threshold = myArg->_threshold;
+    for (unsigned long i = myArg->_i0; i < myArg->_i1; ++ i) {
+        std::map<unsigned long long, unsigned long>::iterator loc0 = w3.find(key3(x[i], x[i + 1], x[i + 2])), 
+            loc1 = w3.find(key3(x[i + 1], x[i + 2], x[i + 3]));
+        if (loc0->second > threshold && loc1->second > threshold) {
             unsigned long long key = key4(x[i], x[i + 1], x[i + 2], x[i + 3]);
-            std::map<unsigned long long, unsigned long>::iterator loc = _w4.find(key);
-            if (loc == _w4.end()) {
-                _w4.insert(std::pair<unsigned long long, unsigned long>(key, 1));
+            std::map<unsigned long long, unsigned long>::iterator loc = w4.find(key);
+            if (loc == w4.end()) {
+                w4.insert(std::pair<unsigned long long, unsigned long>(key, 1));
             } else {
                 loc->second += 1;
             }
         }
-        //if ((i + 1) % 1000000 == 0) {
-            //std::cout << "scan pass 4: " << i + 1 << " completed" << std::endl;
-        //}
     }
+    return NULL;
+}
+
+class ArgBE3: public std::map< unsigned long long, std::pair<double, double> > {
+    public:
+        std::map<unsigned long long, LR>::iterator _locBegin, _locEnd;
+};
+
+void *threadBE3(void *pArgs) {
+    ArgBE3 *myArg = (ArgBE3 *)pArgs;
+    for (std::map<unsigned long long, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
+        double leftSum = 0.0;
+        double leftEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                loc1 != loc->second.first.end(); ++ loc1) {
+            leftEntropy -= loc1->second * log(loc1->second);
+            leftSum += loc1->second;
+        }
+        if (leftSum > 0)
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
+
+        double rightSum = 0.0;
+        double rightEntropy = 0.0;
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                loc2 != loc->second.second.end(); ++ loc2) {
+            rightEntropy -= loc2->second * log(loc2->second);
+            rightSum += loc2->second;
+        }
+        if (rightSum)
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        myArg->insert(std::pair< unsigned long long, std::pair<double, double> >(loc->first, 
+                    std::pair<double, double>(leftEntropy, rightEntropy)));
+    }
+    return NULL;
+}
+
+void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
+    //std::cout << "scan pass 4 begin" << std::endl;
+    //std::cout << "scan 4 begin" << std::endl;
+    int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n >= 1024 && multiThread) {
+        ArgScan4 *args = new ArgScan4[nThreads];
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._w3 = &_w3;
+            args[iThread]._threshold = _threshold;
+            args[iThread]._x = x;
+            args[iThread]._i0 = iThread * (n - 3) / nThreads;
+            args[iThread]._i1 = (iThread + 1) * (n - 3) / nThreads;
+            pthread_create(threads + iThread, NULL, threadScan4, args + iThread);
+        }
+        //std::cout << "args ready" << std::endl;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long long, unsigned long>::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                std::map<unsigned long long, unsigned long>::iterator loc1 = _w4.find(loc->first);
+                if (loc1 == _w4.end()) {
+                    _w4.insert(std::pair<unsigned long, unsigned long>(loc->first, loc->second));
+                } else {
+                    loc1->second += loc->second;
+                }
+            }
+        }
+        delete[] args;
+        delete[] threads;
+    } else {
+        for (unsigned long i = 0; i + 3 < n; ++ i) {
+            std::map<unsigned long long, unsigned long>::iterator loc0 = _w3.find(key3(x[i], x[i + 1], x[i + 2])), 
+                loc1 = _w3.find(key3(x[i + 1], x[i + 2], x[i + 3]));
+            if (loc0->second > _threshold && loc1->second > _threshold) {
+                unsigned long long key = key4(x[i], x[i + 1], x[i + 2], x[i + 3]);
+                std::map<unsigned long long, unsigned long>::iterator loc = _w4.find(key);
+                if (loc == _w4.end()) {
+                    _w4.insert(std::pair<unsigned long long, unsigned long>(key, 1));
+                } else {
+                    loc->second += 1;
+                }
+            }
+        }
+    }
+    //std::cout << "w4 size = " << _w3.size() << std::endl;
+    //std::cout << "scan 4 end" << std::endl;
     //std::cout << "scan pass 4 calculating boundary entropies" << std::endl;
     std::map< unsigned long long, LR > be;
     for (std::map<unsigned long long, unsigned long>::iterator loc = _w3.begin(); loc != _w3.end(); ++ loc) {
@@ -273,34 +645,60 @@ void Apriori::scan4(unsigned long n, unsigned short *x) {
         //}
     }
 
-    kBE = 0;
-    for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
-        double leftSum = 0.0;
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
-            leftEntropy -= loc1->second * log(loc1->second);
-            leftSum += loc1->second;
+    if (be.size() > 1024 && multiThread) {
+        ArgBE3 *args = new ArgBE3[nThreads];
+        kBE = 0;
+        std::map<unsigned long long, LR>::iterator loc = be.begin();
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._locBegin = loc;
+            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
+            for (;kBE < kBEStop; ++ kBE)
+                ++ loc;
+            args[iThread]._locEnd = loc;
+            pthread_create(threads + iThread, NULL, threadBE3, args + iThread);
         }
-        if (leftSum > 0)
-            leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        double rightSum = 0.0;
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
-            rightEntropy -= loc2->second * log(loc2->second);
-            rightSum += loc2->second;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                _bel3[loc->first] = loc->second.first;
+                _ber3[loc->first] = loc->second.second;
+            }
         }
-        if (rightSum > 0)
-            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        delete[] args;
+        delete[] threads;
+    } else {
+        kBE = 0;
+        for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+            double leftSum = 0.0;
+            double leftEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                    loc1 != loc->second.first.end(); ++ loc1) {
+                leftEntropy -= loc1->second * log(loc1->second);
+                leftSum += loc1->second;
+            }
+            if (leftSum > 0)
+                leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        _bel3[loc->first] = leftEntropy;
-        _ber3[loc->first] = rightEntropy;
+            double rightSum = 0.0;
+            double rightEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                    loc2 != loc->second.second.end(); ++ loc2) {
+                rightEntropy -= loc2->second * log(loc2->second);
+                rightSum += loc2->second;
+            }
+            if (rightSum > 0)
+                rightEntropy = log(rightSum) - rightEntropy / rightSum;
 
-        //if ((kBE + 1) % 10000 == 0) {
-            //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
-        //}
+            _bel3[loc->first] = leftEntropy;
+            _ber3[loc->first] = rightEntropy;
+
+            //if ((kBE + 1) % 10000 == 0) {
+                //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+            //}
+        }
     }
     //std::cout << "scan pass 4 done" << std::endl;
 
@@ -336,32 +734,59 @@ void Apriori::scan4(unsigned long n, unsigned short *x) {
         //}
     }
     //std::cout << "scan pass 5 calculating boundary entropies" << std::endl;
-    kBE = 0;
-    for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
-        double leftSum = 0.0;
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
-            leftEntropy -= loc1->second * log(loc1->second);
-            leftSum += loc1->second;
+    if (be.size() > 1024 && multiThread) {
+        ArgBE3 *args = new ArgBE3[nThreads];
+        kBE = 0;
+        std::map<unsigned long long, LR>::iterator loc = be.begin();
+        pthread_t *threads = new pthread_t[nThreads];
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            args[iThread]._locBegin = loc;
+            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
+            for (;kBE < kBEStop; ++ kBE)
+                ++ loc;
+            args[iThread]._locEnd = loc;
+            pthread_create(threads + iThread, NULL, threadBE3, args + iThread);
         }
-        leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        double rightSum = 0.0;
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
-            rightEntropy -= loc2->second * log(loc2->second);
-            rightSum += loc2->second;
+        for (int iThread = 0; iThread < nThreads; ++ iThread) {
+            pthread_join(threads[iThread], NULL);
+            for (std::map<unsigned long long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
+                    loc != args[iThread].end(); ++ loc) {
+                _bel4[loc->first] = loc->second.first;
+                _ber4[loc->first] = loc->second.second;
+            }
         }
-        rightEntropy = log(rightSum) - rightEntropy / rightSum;
+        delete[] args;
+        delete[] threads;
+    } else {
+        kBE = 0;
+        for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
+            double leftSum = 0.0;
+            double leftEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
+                    loc1 != loc->second.first.end(); ++ loc1) {
+                leftEntropy -= loc1->second * log(loc1->second);
+                leftSum += loc1->second;
+            }
+            leftEntropy = log(leftSum) - leftEntropy / leftSum;
 
-        _bel4[loc->first] = leftEntropy;
-        _ber4[loc->first] = rightEntropy;
-        //if ((kBE + 1) % 10000 == 0) {
-            //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
-        //}
+            double rightSum = 0.0;
+            double rightEntropy = 0.0;
+            for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
+                    loc2 != loc->second.second.end(); ++ loc2) {
+                rightEntropy -= loc2->second * log(loc2->second);
+                rightSum += loc2->second;
+            }
+            rightEntropy = log(rightSum) - rightEntropy / rightSum;
+
+            _bel4[loc->first] = leftEntropy;
+            _ber4[loc->first] = rightEntropy;
+            //if ((kBE + 1) % 10000 == 0) {
+                //std::cout << "scan pass 4 compute BE: " << kBE + 1 << " of " << be.size() << " completed" << std::endl;
+            //}
+        }
     }
+    //std::cout << "scan pass 5 done" << std::endl;
 }
 
 void Apriori::scan4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x) {
@@ -386,11 +811,11 @@ void Apriori::scan4(unsigned long n, int pos1, int pos2, int pos3, int pos4, uns
     }
 }
 
-void Apriori::scan(unsigned long n, unsigned short *x) {
-    scan1(n, x);
-    scan2(n, x);
-    scan3(n, x);
-    scan4(n, x);
+void Apriori::scan(unsigned long n, unsigned short *x, bool multiThread) {
+    scan1(n, x, multiThread);
+    scan2(n, x, multiThread);
+    scan3(n, x, multiThread);
+    scan4(n, x, multiThread);
 }
 
 void Apriori::scan(unsigned long n, int pos1, int pos2, unsigned short *x) {
@@ -546,6 +971,7 @@ int Apriori::getIndex4(unsigned long n, int pos1, int pos2, int pos3, int pos4, 
 }
 
 void Apriori::saveToFile(char *fileName) {
+    //std::cout << "saveToFile begin" << std::endl;
     FILE *f = fopen(fileName, "w");
     assert(1 == fwrite(&_threshold, sizeof(_threshold), 1, f));
 
@@ -566,6 +992,10 @@ void Apriori::saveToFile(char *fileName) {
     n[13] = _i3.size();
     n[14] = _i4.size();
     assert(15 == fwrite(n, sizeof(n[0]), 15, f));
+    //for (unsigned int i = 0; i < 15; ++ i) {
+        //printf("%lu ", n[i]);
+    //}
+    //printf("\n");
 
     if (n[0] > 0) {
         unsigned short *keyW1 = new unsigned short[n[0]];
@@ -793,6 +1223,7 @@ void Apriori::saveToFile(char *fileName) {
     }
 
     fclose(f);
+    //std::cout << "saveToFile end" << std::endl;
 }
 
 void Apriori::loadFromFile(char *fileName) {

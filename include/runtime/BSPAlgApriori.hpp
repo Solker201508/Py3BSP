@@ -16,17 +16,17 @@ namespace BSP {
                 std::map<unsigned long long, unsigned long> _i4;
                 unsigned int _threshold;
             protected:
-                void scan1(unsigned long n, unsigned short *x); 
-                void scan2(unsigned long n, unsigned short *x);
+                void scan1(unsigned long n, unsigned short *x, bool multiThread); 
+                void scan2(unsigned long n, unsigned short *x, bool multiThread);
                 void scan2(unsigned long n, int pos1, int pos2, unsigned short *x);
-                void scan3(unsigned long n, unsigned short *x);
+                void scan3(unsigned long n, unsigned short *x, bool multiThread);
                 void scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x);
-                void scan4(unsigned long n, unsigned short *x);
+                void scan4(unsigned long n, unsigned short *x, bool multiThread);
                 void scan4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x);
             public:
                 Apriori(unsigned int threshold);
                 ~Apriori();
-                void scan(unsigned long n, unsigned short *x);
+                void scan(unsigned long n, unsigned short *x, bool multiThread = true);
                 void scan(unsigned long n, int pos1, int pos2, unsigned short *x);
                 void scan(unsigned long n, int pos1, int pos2, int pos3, unsigned short *x);
                 void scan(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x);

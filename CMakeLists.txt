@@ -1,5 +1,7 @@
 project(Py3BSP)
 cmake_minimum_required(VERSION 2.6)
+set( CMAKE_CXX_FLAGS -O3 )
+set( CMAKE_LD_FLAGS -O3 )
 
 exec_program( python3-config ARGS --includes | cut -d' '  -f1 | sed 's/-I//g' OUTPUT_VARIABLE PYTHON3_INC )
 message ( ${PYTHON3_INC} )
