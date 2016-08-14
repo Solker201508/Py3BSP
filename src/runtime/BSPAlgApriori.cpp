@@ -108,7 +108,7 @@ typedef std::pair< std::map<unsigned short, unsigned long>, std::map<unsigned sh
 
 class ArgScan2: public std::map<unsigned long, unsigned long> {
     public:
-        std::map<unsigned short, unsigned long> *_w1;
+        std::map<unsigned short, unsigned long> _w1;
         unsigned short *_x;
         unsigned long _i0, _i1;
         unsigned long _threshold;
@@ -116,7 +116,7 @@ class ArgScan2: public std::map<unsigned long, unsigned long> {
 
 void *threadScan2(void *pArgs) {
     ArgScan2 *myArg =  (ArgScan2 *)pArgs;
-    std::map<unsigned short, unsigned long> &w1 = *myArg->_w1;
+    std::map<unsigned short, unsigned long> &w1 = myArg->_w1;
     std::map<unsigned long, unsigned long> &w2 = *myArg;
     unsigned short *x = myArg->_x;
     unsigned long threshold = myArg->_threshold;
@@ -135,18 +135,22 @@ void *threadScan2(void *pArgs) {
     return NULL;
 }
 
-class ArgBE1: public std::map< unsigned short, std::pair<double, double> > {
+class ArgBE {
     public:
-        std::map<unsigned short, LR>::iterator _locBegin, _locEnd;
+        unsigned long _kBegin, _kEnd;
+        double *_leftEntropy;
+        double *_rightEntropy;
+        LR *_map;
 };
 
-void *threadBE1(void *pArgs) {
-    ArgBE1 *myArg = (ArgBE1 *)pArgs;
-    for (std::map<unsigned short, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
+void *threadBE(void *pArgs) {
+    ArgBE *myArg = (ArgBE *)pArgs;
+    for (unsigned long k = myArg->_kBegin; k < myArg->_kEnd; ++ k) {
+        LR &loc = *(myArg->_map + k);
         double leftSum = 0.0;
         double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
+        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc.first.begin(); 
+                loc1 != loc.first.end(); ++ loc1) {
             leftEntropy -= loc1->second * log(loc1->second);
             leftSum += loc1->second;
         }
@@ -155,15 +159,15 @@ void *threadBE1(void *pArgs) {
 
         double rightSum = 0.0;
         double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
+        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc.second.begin(); 
+                loc2 != loc.second.end(); ++ loc2) {
             rightEntropy -= loc2->second * log(loc2->second);
             rightSum += loc2->second;
         }
         if (rightSum)
             rightEntropy = log(rightSum) - rightEntropy / rightSum;
-        myArg->insert(std::pair< unsigned short, std::pair<double, double> >(loc->first, 
-                    std::pair<double, double>(leftEntropy, rightEntropy)));
+        myArg->_leftEntropy[k] = leftEntropy;
+        myArg->_rightEntropy[k] = rightEntropy;
     }
     return NULL;
 }
@@ -175,7 +179,7 @@ void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
         ArgScan2 *args = new ArgScan2[nThreads];
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._w1 = &_w1;
+            args[iThread]._w1 = _w1;
             args[iThread]._threshold = _threshold;
             args[iThread]._x = x;
             args[iThread]._i0 = iThread * (n - 1) / nThreads;
@@ -233,30 +237,47 @@ void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
         //}
     }
 
-    if (be.size() >= 1024 && multiThread) {
-        ArgBE1 *args = new ArgBE1[nThreads];
-        kBE = 0;
+    unsigned long nBE = be.size();
+    if (nBE >= 1024 && multiThread) {
+        unsigned short *key = new unsigned short[nBE];
+        double *leftEntropy = new double[nBE];
+        double *rightEntropy = new double[nBE];
+        LR *myMap = new LR[nBE];
         std::map<unsigned short, LR>::iterator loc = be.begin();
+        for (kBE = 0; kBE < nBE; ++ kBE, ++ loc) {
+            key[kBE] = loc->first;
+            myMap[kBE] = loc->second;
+        }
+
+        ArgBE *args = new ArgBE[nThreads];
+        kBE = 0;
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._locBegin = loc;
-            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
-            for (;kBE < kBEStop; ++ kBE)
-                ++ loc;
-            args[iThread]._locEnd = loc;
-            pthread_create(threads + iThread, NULL, threadBE1, args + iThread);
+            unsigned long kBegin = iThread * nBE / nThreads;
+            unsigned long kEnd = (iThread + 1) * nBE / nThreads;
+            args[iThread]._kBegin = kBegin;
+            args[iThread]._kEnd = kEnd;
+            args[iThread]._map = myMap;
+            args[iThread]._leftEntropy = leftEntropy;
+            args[iThread]._rightEntropy = rightEntropy;
+            pthread_create(threads + iThread, NULL, threadBE, args + iThread);
         }
 
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
             pthread_join(threads[iThread], NULL);
-            for (std::map<unsigned short, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
-                    loc != args[iThread].end(); ++ loc) {
-                _bel1[loc->first] = loc->second.first;
-                _ber1[loc->first] = loc->second.second;
+            unsigned long kBegin = args[iThread]._kBegin;
+            unsigned long kEnd = args[iThread]._kEnd;
+            for (kBE = kBegin; kBE < kEnd;) {
+                _bel1[key[kBE]] = leftEntropy[kBE];
+                _ber1[key[kBE]] = rightEntropy[kBE];
             }
         }
         delete[] args;
         delete[] threads;
+        delete[] key;
+        delete[] leftEntropy;
+        delete[] rightEntropy;
+        delete[] myMap;
     } else {
         kBE = 0;
         for (std::map<unsigned short, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
@@ -311,7 +332,7 @@ void Apriori::scan2(unsigned long n, int pos1, int pos2, unsigned short *x) {
 
 class ArgScan3: public std::map<unsigned long long, unsigned long> {
     public:
-        std::map<unsigned long, unsigned long> *_w2;
+        std::map<unsigned long, unsigned long> _w2;
         unsigned short *_x;
         unsigned long _i0, _i1;
         unsigned long _threshold;
@@ -319,7 +340,7 @@ class ArgScan3: public std::map<unsigned long long, unsigned long> {
 
 void *threadScan3(void *pArgs) {
     ArgScan3 *myArg =  (ArgScan3 *)pArgs;
-    std::map<unsigned long, unsigned long> &w2 = *myArg->_w2;
+    std::map<unsigned long, unsigned long> &w2 = myArg->_w2;
     std::map<unsigned long long, unsigned long> &w3 = *myArg;
     unsigned short *x = myArg->_x;
     unsigned long threshold = myArg->_threshold;
@@ -339,39 +360,6 @@ void *threadScan3(void *pArgs) {
     return NULL;
 }
 
-class ArgBE2: public std::map< unsigned long, std::pair<double, double> > {
-    public:
-        std::map<unsigned long, LR>::iterator _locBegin, _locEnd;
-};
-
-void *threadBE2(void *pArgs) {
-    ArgBE2 *myArg = (ArgBE2 *)pArgs;
-    for (std::map<unsigned long, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
-        double leftSum = 0.0;
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
-            leftEntropy -= loc1->second * log(loc1->second);
-            leftSum += loc1->second;
-        }
-        if (leftSum > 0)
-            leftEntropy = log(leftSum) - leftEntropy / leftSum;
-
-        double rightSum = 0.0;
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
-            rightEntropy -= loc2->second * log(loc2->second);
-            rightSum += loc2->second;
-        }
-        if (rightSum)
-            rightEntropy = log(rightSum) - rightEntropy / rightSum;
-        myArg->insert(std::pair< unsigned long, std::pair<double, double> >(loc->first, 
-                    std::pair<double, double>(leftEntropy, rightEntropy)));
-    }
-    return NULL;
-}
-
 void Apriori::scan3(unsigned long n, unsigned short *x, bool multiThread) {
     //std::cout << "scan pass 3 begin" << std::endl;
     //std::cout << "scan 3 begin" << std::endl;
@@ -380,7 +368,7 @@ void Apriori::scan3(unsigned long n, unsigned short *x, bool multiThread) {
         ArgScan3 *args = new ArgScan3[nThreads];
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._w2 = &_w2;
+            args[iThread]._w2 = _w2;
             args[iThread]._threshold = _threshold;
             args[iThread]._x = x;
             args[iThread]._i0 = iThread * (n - 2) / nThreads;
@@ -437,30 +425,47 @@ void Apriori::scan3(unsigned long n, unsigned short *x, bool multiThread) {
         //}
     }
 
-    if (be.size() >= 1024 && multiThread) {
-        ArgBE2 *args = new ArgBE2[nThreads];
-        kBE = 0;
+    unsigned long nBE = be.size();
+    if (nBE >= 1024 && multiThread) {
+        unsigned long *key = new unsigned long[nBE];
+        double *leftEntropy = new double[nBE];
+        double *rightEntropy = new double[nBE];
+        LR *myMap = new LR[nBE];
         std::map<unsigned long, LR>::iterator loc = be.begin();
+        for (kBE = 0; kBE < nBE; ++ kBE, ++ loc) {
+            key[kBE] = loc->first;
+            myMap[kBE] = loc->second;
+        }
+
+        ArgBE *args = new ArgBE[nThreads];
+        kBE = 0;
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._locBegin = loc;
-            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
-            for (;kBE < kBEStop; ++ kBE)
-                ++ loc;
-            args[iThread]._locEnd = loc;
-            pthread_create(threads + iThread, NULL, threadBE2, args + iThread);
+            unsigned long kBegin = iThread * nBE / nThreads;
+            unsigned long kEnd = (iThread + 1) * nBE / nThreads;
+            args[iThread]._kBegin = kBegin;
+            args[iThread]._kEnd = kEnd;
+            args[iThread]._map = myMap;
+            args[iThread]._leftEntropy = leftEntropy;
+            args[iThread]._rightEntropy = rightEntropy;
+            pthread_create(threads + iThread, NULL, threadBE, args + iThread);
         }
 
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
             pthread_join(threads[iThread], NULL);
-            for (std::map<unsigned long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
-                    loc != args[iThread].end(); ++ loc) {
-                _bel2[loc->first] = loc->second.first;
-                _ber2[loc->first] = loc->second.second;
+            unsigned long kBegin = args[iThread]._kBegin;
+            unsigned long kEnd = args[iThread]._kEnd;
+            for (kBE = kBegin; kBE < kEnd;) {
+                _bel2[key[kBE]] = leftEntropy[kBE];
+                _ber2[key[kBE]] = rightEntropy[kBE];
             }
         }
         delete[] args;
         delete[] threads;
+        delete[] key;
+        delete[] leftEntropy;
+        delete[] rightEntropy;
+        delete[] myMap;
     } else {
         kBE = 0;
         for (std::map<unsigned long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
@@ -519,7 +524,7 @@ void Apriori::scan3(unsigned long n, int pos1, int pos2, int pos3, unsigned shor
 
 class ArgScan4: public std::map<unsigned long long, unsigned long> {
     public:
-        std::map<unsigned long long, unsigned long> *_w3;
+        std::map<unsigned long long, unsigned long> _w3;
         unsigned short *_x;
         unsigned long _i0, _i1;
         unsigned long _threshold;
@@ -527,7 +532,7 @@ class ArgScan4: public std::map<unsigned long long, unsigned long> {
 
 void *threadScan4(void *pArgs) {
     ArgScan4 *myArg =  (ArgScan4 *)pArgs;
-    std::map<unsigned long long, unsigned long> &w3 = *myArg->_w3;
+    std::map<unsigned long long, unsigned long> &w3 = myArg->_w3;
     std::map<unsigned long long, unsigned long> &w4 = *myArg;
     unsigned short *x = myArg->_x;
     unsigned long threshold = myArg->_threshold;
@@ -547,39 +552,6 @@ void *threadScan4(void *pArgs) {
     return NULL;
 }
 
-class ArgBE3: public std::map< unsigned long long, std::pair<double, double> > {
-    public:
-        std::map<unsigned long long, LR>::iterator _locBegin, _locEnd;
-};
-
-void *threadBE3(void *pArgs) {
-    ArgBE3 *myArg = (ArgBE3 *)pArgs;
-    for (std::map<unsigned long long, LR>::iterator loc = myArg->_locBegin; loc != myArg->_locEnd; ++ loc) {
-        double leftSum = 0.0;
-        double leftEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc1 = loc->second.first.begin(); 
-                loc1 != loc->second.first.end(); ++ loc1) {
-            leftEntropy -= loc1->second * log(loc1->second);
-            leftSum += loc1->second;
-        }
-        if (leftSum > 0)
-            leftEntropy = log(leftSum) - leftEntropy / leftSum;
-
-        double rightSum = 0.0;
-        double rightEntropy = 0.0;
-        for (std::map<unsigned short, unsigned long>::iterator loc2 = loc->second.second.begin(); 
-                loc2 != loc->second.second.end(); ++ loc2) {
-            rightEntropy -= loc2->second * log(loc2->second);
-            rightSum += loc2->second;
-        }
-        if (rightSum)
-            rightEntropy = log(rightSum) - rightEntropy / rightSum;
-        myArg->insert(std::pair< unsigned long long, std::pair<double, double> >(loc->first, 
-                    std::pair<double, double>(leftEntropy, rightEntropy)));
-    }
-    return NULL;
-}
-
 void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
     //std::cout << "scan pass 4 begin" << std::endl;
     //std::cout << "scan 4 begin" << std::endl;
@@ -588,7 +560,7 @@ void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
         ArgScan4 *args = new ArgScan4[nThreads];
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._w3 = &_w3;
+            args[iThread]._w3 = _w3;
             args[iThread]._threshold = _threshold;
             args[iThread]._x = x;
             args[iThread]._i0 = iThread * (n - 3) / nThreads;
@@ -645,30 +617,47 @@ void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
         //}
     }
 
-    if (be.size() > 1024 && multiThread) {
-        ArgBE3 *args = new ArgBE3[nThreads];
-        kBE = 0;
+    unsigned long nBE = be.size();
+    if (nBE >= 1024 && multiThread) {
+        unsigned long long *key = new unsigned long long[nBE];
+        double *leftEntropy = new double[nBE];
+        double *rightEntropy = new double[nBE];
+        LR *myMap = new LR[nBE];
         std::map<unsigned long long, LR>::iterator loc = be.begin();
+        for (kBE = 0; kBE < nBE; ++ kBE, ++ loc) {
+            key[kBE] = loc->first;
+            myMap[kBE] = loc->second;
+        }
+
+        ArgBE *args = new ArgBE[nThreads];
+        kBE = 0;
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._locBegin = loc;
-            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
-            for (;kBE < kBEStop; ++ kBE)
-                ++ loc;
-            args[iThread]._locEnd = loc;
-            pthread_create(threads + iThread, NULL, threadBE3, args + iThread);
+            unsigned long kBegin = iThread * nBE / nThreads;
+            unsigned long kEnd = (iThread + 1) * nBE / nThreads;
+            args[iThread]._kBegin = kBegin;
+            args[iThread]._kEnd = kEnd;
+            args[iThread]._map = myMap;
+            args[iThread]._leftEntropy = leftEntropy;
+            args[iThread]._rightEntropy = rightEntropy;
+            pthread_create(threads + iThread, NULL, threadBE, args + iThread);
         }
 
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
             pthread_join(threads[iThread], NULL);
-            for (std::map<unsigned long long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
-                    loc != args[iThread].end(); ++ loc) {
-                _bel3[loc->first] = loc->second.first;
-                _ber3[loc->first] = loc->second.second;
+            unsigned long kBegin = args[iThread]._kBegin;
+            unsigned long kEnd = args[iThread]._kEnd;
+            for (kBE = kBegin; kBE < kEnd;) {
+                _bel3[key[kBE]] = leftEntropy[kBE];
+                _ber3[key[kBE]] = rightEntropy[kBE];
             }
         }
         delete[] args;
         delete[] threads;
+        delete[] key;
+        delete[] leftEntropy;
+        delete[] rightEntropy;
+        delete[] myMap;
     } else {
         kBE = 0;
         for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
@@ -734,30 +723,47 @@ void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
         //}
     }
     //std::cout << "scan pass 5 calculating boundary entropies" << std::endl;
-    if (be.size() > 1024 && multiThread) {
-        ArgBE3 *args = new ArgBE3[nThreads];
-        kBE = 0;
+    nBE = be.size();
+    if (nBE >= 1024 && multiThread) {
+        unsigned long long *key = new unsigned long long[nBE];
+        double *leftEntropy = new double[nBE];
+        double *rightEntropy = new double[nBE];
+        LR *myMap = new LR[nBE];
         std::map<unsigned long long, LR>::iterator loc = be.begin();
+        for (kBE = 0; kBE < nBE; ++ kBE, ++ loc) {
+            key[kBE] = loc->first;
+            myMap[kBE] = loc->second;
+        }
+
+        ArgBE *args = new ArgBE[nThreads];
+        kBE = 0;
         pthread_t *threads = new pthread_t[nThreads];
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
-            args[iThread]._locBegin = loc;
-            unsigned long kBEStop = (iThread + 1) * be.size() / nThreads;
-            for (;kBE < kBEStop; ++ kBE)
-                ++ loc;
-            args[iThread]._locEnd = loc;
-            pthread_create(threads + iThread, NULL, threadBE3, args + iThread);
+            unsigned long kBegin = iThread * nBE / nThreads;
+            unsigned long kEnd = (iThread + 1) * nBE / nThreads;
+            args[iThread]._kBegin = kBegin;
+            args[iThread]._kEnd = kEnd;
+            args[iThread]._map = myMap;
+            args[iThread]._leftEntropy = leftEntropy;
+            args[iThread]._rightEntropy = rightEntropy;
+            pthread_create(threads + iThread, NULL, threadBE, args + iThread);
         }
 
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
             pthread_join(threads[iThread], NULL);
-            for (std::map<unsigned long long, std::pair<double, double> >::iterator loc = args[iThread].begin(); 
-                    loc != args[iThread].end(); ++ loc) {
-                _bel4[loc->first] = loc->second.first;
-                _ber4[loc->first] = loc->second.second;
+            unsigned long kBegin = args[iThread]._kBegin;
+            unsigned long kEnd = args[iThread]._kEnd;
+            for (kBE = kBegin; kBE < kEnd;) {
+                _bel4[key[kBE]] = leftEntropy[kBE];
+                _ber4[key[kBE]] = rightEntropy[kBE];
             }
         }
         delete[] args;
         delete[] threads;
+        delete[] key;
+        delete[] leftEntropy;
+        delete[] rightEntropy;
+        delete[] myMap;
     } else {
         kBE = 0;
         for (std::map<unsigned long long, LR>::iterator loc = be.begin(); loc != be.end(); ++ loc, ++ kBE) {
@@ -1228,10 +1234,10 @@ void Apriori::saveToFile(char *fileName) {
 
 void Apriori::loadFromFile(char *fileName) {
     FILE *f = fopen(fileName, "r");
-    fread(&_threshold, sizeof(_threshold), 1, f);
+    assert(1 == fread(&_threshold, sizeof(_threshold), 1, f));
 
     unsigned long n[15]; 
-    fread(n, sizeof(n[0]), 15, f);
+    assert(15 == fread(n, sizeof(n[0]), 15, f));
 
     if (n[0] > 0) {
         unsigned short *keyW1 = new unsigned short[n[0]];
