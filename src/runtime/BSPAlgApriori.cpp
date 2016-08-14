@@ -145,6 +145,7 @@ class ArgBE {
 
 void *threadBE(void *pArgs) {
     ArgBE *myArg = (ArgBE *)pArgs;
+    //std::cout << "start at " << myArg->_kBegin << ", approaching " << myArg->_kEnd << std::endl;
     for (unsigned long k = myArg->_kBegin; k < myArg->_kEnd; ++ k) {
         LR &loc = *(myArg->_map + k);
         double leftSum = 0.0;
@@ -169,6 +170,7 @@ void *threadBE(void *pArgs) {
         myArg->_leftEntropy[k] = leftEntropy;
         myArg->_rightEntropy[k] = rightEntropy;
     }
+    //std::cout << "stop at " << myArg->_kEnd << std::endl;
     return NULL;
 }
 
@@ -238,6 +240,7 @@ void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
     }
 
     unsigned long nBE = be.size();
+    //std::cout << "nBE = " << nBE << std::endl;
     if (nBE >= 1024 && multiThread) {
         unsigned short *key = new unsigned short[nBE];
         double *leftEntropy = new double[nBE];
@@ -248,6 +251,7 @@ void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
             key[kBE] = loc->first;
             myMap[kBE] = loc->second;
         }
+        //std::cout << "args ready" << std::endl;
 
         ArgBE *args = new ArgBE[nThreads];
         kBE = 0;
@@ -265,12 +269,14 @@ void Apriori::scan2(unsigned long n, unsigned short *x, bool multiThread) {
 
         for (int iThread = 0; iThread < nThreads; ++ iThread) {
             pthread_join(threads[iThread], NULL);
+            //std::cout << "processing iThread = " << iThread << std::endl;
             unsigned long kBegin = args[iThread]._kBegin;
             unsigned long kEnd = args[iThread]._kEnd;
-            for (kBE = kBegin; kBE < kEnd;) {
+            for (kBE = kBegin; kBE < kEnd; ++kBE) {
                 _bel1[key[kBE]] = leftEntropy[kBE];
                 _ber1[key[kBE]] = rightEntropy[kBE];
             }
+            //std::cout << "complete iThread = " << iThread << std::endl;
         }
         delete[] args;
         delete[] threads;
@@ -455,7 +461,7 @@ void Apriori::scan3(unsigned long n, unsigned short *x, bool multiThread) {
             pthread_join(threads[iThread], NULL);
             unsigned long kBegin = args[iThread]._kBegin;
             unsigned long kEnd = args[iThread]._kEnd;
-            for (kBE = kBegin; kBE < kEnd;) {
+            for (kBE = kBegin; kBE < kEnd; ++kBE) {
                 _bel2[key[kBE]] = leftEntropy[kBE];
                 _ber2[key[kBE]] = rightEntropy[kBE];
             }
@@ -647,7 +653,7 @@ void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
             pthread_join(threads[iThread], NULL);
             unsigned long kBegin = args[iThread]._kBegin;
             unsigned long kEnd = args[iThread]._kEnd;
-            for (kBE = kBegin; kBE < kEnd;) {
+            for (kBE = kBegin; kBE < kEnd; ++kBE) {
                 _bel3[key[kBE]] = leftEntropy[kBE];
                 _ber3[key[kBE]] = rightEntropy[kBE];
             }
@@ -753,7 +759,7 @@ void Apriori::scan4(unsigned long n, unsigned short *x, bool multiThread) {
             pthread_join(threads[iThread], NULL);
             unsigned long kBegin = args[iThread]._kBegin;
             unsigned long kEnd = args[iThread]._kEnd;
-            for (kBE = kBegin; kBE < kEnd;) {
+            for (kBE = kBegin; kBE < kEnd; ++kBE) {
                 _bel4[key[kBE]] = leftEntropy[kBE];
                 _ber4[key[kBE]] = rightEntropy[kBE];
             }
