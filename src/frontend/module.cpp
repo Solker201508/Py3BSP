@@ -2021,14 +2021,14 @@ extern "C" {
                 &objResult, &objSeq, &strFileName, &t20, &t21, &t30, &t31, &t32, &start);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.getFreqIndex");
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
         bool useTmpl2 = (t20 != 0) || (t21 != 0);
         bool useTmpl3 = (t30 != 0) || (t31 != 0) || (t32 != 0);
         if (useTmpl2 && useTmpl3) 
         {
             bsp_typeError("tmpl2 and tmpl3 are not allowed to be used at the same time for bsp.getFreqIndex");
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
 
         Py_XINCREF(objResult);
@@ -2037,7 +2037,7 @@ extern "C" {
             bsp_typeError("invalid result array for bsp.getFreqIndex");
             Py_XDECREF(objResult);
             Py_XDECREF(objSeq);
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
         PyArrayObject *resultArray = (PyArrayObject *)objResult;
         npy_intp *stridesOfResult = PyArray_STRIDES(resultArray);
@@ -2052,7 +2052,7 @@ extern "C" {
             bsp_typeError("Invalid element type of the result array for bsp.findFreqIndex");
             Py_XDECREF(objResult);
             Py_XDECREF(objSeq);
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
         npy_intp *dimSizeOfResult = PyArray_DIMS(resultArray);
         unsigned long n = 1;
@@ -2064,7 +2064,7 @@ extern "C" {
             bsp_typeError("invalid sequence for bsp.getFreqIndex");
             Py_XDECREF(objResult);
             Py_XDECREF(objSeq);
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
         npy_intp *strides = PyArray_STRIDES(numpyArray);
@@ -2084,19 +2084,20 @@ extern "C" {
             bsp_typeError("invalid element type/size of sequence for bsp.getFreqIndex");
             Py_XDECREF(objResult);
             Py_XDECREF(objSeq);
-            Py_RETURN_FALSE;
+            Py_RETURN_NONE;
         }
         unsigned short *x = (unsigned short *)PyArray_BYTES(numpyArray);
         Apriori apriori(elemSize);
         apriori.loadFromFile(strFileName);
+        int retval = 0;
         if (useTmpl2) {
-            apriori.getIndex2(n, t20, t21, x, start, result);
+            retval = apriori.getIndex2(n, t20, t21, x, start, result);
         } else if (useTmpl3) {
-            apriori.getIndex3(n, t30, t31, t32, x, start, result);
+            retval = apriori.getIndex3(n, t30, t31, t32, x, start, result);
         }
         Py_XDECREF(objResult);
         Py_XDECREF(objSeq);
-        Py_RETURN_TRUE;
+        return Py_BuildValue("i", retval);
     }
 
     //static PyObject *bsp_repeat(PyObject *self, PyObject *args) {
