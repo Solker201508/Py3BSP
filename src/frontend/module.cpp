@@ -64,6 +64,23 @@ void bsp_runtimeError(std::string strErr) {
         << bsp_getScriptPos();
 }
 
+PyObject *PyRetVal(PyObject *obj) {
+    Py_XINCREF(obj);
+    return obj;
+}
+
+class PyRef {
+    private:
+        PyObject *_obj;
+    public:
+        PyRef(PyObject *obj) {
+            Py_XINCREF(_obj = obj);
+        }
+        ~PyRef() {
+            Py_XDECREF(_obj);
+        }
+};
+
 extern "C" {
     void finiBSP() {
         for (std::map<IndexSet *, int>::iterator iter = indexSetToID_.begin();
@@ -91,7 +108,10 @@ extern "C" {
         ctypes_addressof_ = NULL;
         fromProc_ = NULL;
         nProcs_ = 0;
-        Py_Finalize();
+        try {
+            Py_Finalize();
+        } catch (...) {
+        }
         delete runtime_;
     }
 
@@ -103,7 +123,7 @@ extern "C" {
             Py_RETURN_NONE;
         }
         uint64_t result = runtime_->getMyProcessID();
-        return Py_BuildValue("l",(long)result);
+        return PyRetVal(Py_BuildValue("l",(long)result));
     }
 
     // procCount = bsp.procCount()
@@ -113,7 +133,7 @@ extern "C" {
             bsp_typeError("bsp.procCount requires no arguments");
             Py_RETURN_NONE;
         }
-        return Py_BuildValue("l",(long)nProcs_);
+        return PyRetVal(Py_BuildValue("l",(long)nProcs_));
     }
 
     // importedFromProcID = bsp.fromProc(procID)
@@ -125,10 +145,9 @@ extern "C" {
             Py_RETURN_NONE;
         }
         if (NULL == fromProc_) {
-            return Py_BuildValue("{}");
+            return PyRetVal(Py_BuildValue("{}"));
         } else {
-            Py_XINCREF(fromProc_[procID]);
-            return fromProc_[procID];
+            return PyRetVal(fromProc_[procID]);
         }
     }
 
@@ -137,34 +156,32 @@ extern "C" {
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromObject",&input,&path);
-        Py_XINCREF(input);
+        PyRef refInput(input);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.fromObject(object,arrayPath)");
-            Py_XDECREF(input);
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         PyObject *param = Py_BuildValue("(O)",input);
         PyObject *strObj = PyObject_CallObject(pickle_dumps_,param);
         Py_XDECREF(param);
-        Py_XDECREF(input);
         if (NULL == strObj) {
             bsp_runtimeError("failed to call pickle.dumps()");
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         Py_buffer buf;
         ok = PyArg_Parse(strObj,"s*:bsp.fromObject.getStr",&buf);
-        Py_DECREF(strObj);
+        Py_XDECREF(strObj);
         if (!ok) {
             bsp_runtimeError("failed to get string from output of pickle.dumps()");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         try {
             runtime_->fromBuffer((const char *)buf.buf, 'u', 1, &buf.len, &buf.itemsize, std::string(path));
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     LocalArray *bsp_convertNumpy(PyArrayObject *numpyArray, const char *path) {
@@ -207,24 +224,21 @@ extern "C" {
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromNumpy",&input,&path);
-        Py_XINCREF(input);
+        PyRef refInput(input);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.fromNumpy(NumpyArray,arrayPath)");
-            Py_XDECREF(input);
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         if (!PyArray_Check(input)) {
             bsp_typeError("invalid arguments for bsp.fromNumpy(NumpyArray,arrayPath)");
-            Py_XDECREF(input);
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)input;
         LocalArray *localArray = bsp_convertNumpy(numpyArray,path);
-        Py_XDECREF(input);
         if (localArray)
-            return Py_BuildValue("O",Py_True);
+            Py_RETURN_TRUE;
         else
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
     }
 
     // object = bsp.toObject(arrayPath)
@@ -411,11 +425,10 @@ extern "C" {
         PyObject *arrayShape = NULL;
         uint64_t dimSize[7] = {0,0,0,0,0,0,0};
         int ok = PyArg_ParseTuple(args,"ssO:bsp.createArray",&arrayPath,&dtype,&arrayShape);
-        Py_XINCREF(arrayShape);
+        PyRef refArrayShape(arrayShape);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.createArray(arrayPath,dtype,arrayShape)");
-            Py_XDECREF(arrayShape);
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         if (PyTuple_Check(arrayShape)) {
             ok = PyArg_ParseTuple(arrayShape,"k|kkkkkk:bsp.createArray.extractArrayShape",
@@ -426,32 +439,28 @@ extern "C" {
                     (unsigned long *)(dimSize + 4),
                     (unsigned long *)(dimSize + 5),
                     (unsigned long *)(dimSize + 6));
-            Py_XDECREF(arrayShape);
             if (!ok || dimSize[0] == 0) {
                 bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
-                return Py_BuildValue("O",Py_False);
+                Py_RETURN_FALSE;
             }
         } else if (PyList_Check(arrayShape)) {
             Py_ssize_t nItems = PyList_GET_SIZE(arrayShape);
             for (Py_ssize_t iItem = 0; iItem < nItems; ++iItem) {
                 PyObject *item = PyList_GET_ITEM(arrayShape,iItem);
-                Py_XINCREF(item);
+                PyRef refItem(item);
                 unsigned long sizeOfThisDim = 0;
                 ok = PyArg_Parse(item, "k", &sizeOfThisDim);
-                Py_XDECREF(item);
                 if (!ok)
                     break;
                 dimSize[iItem] = sizeOfThisDim;
             }
-            Py_XDECREF(arrayShape);
             if (!ok || dimSize[0] == 0) {
                 bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
-                return Py_BuildValue("O",Py_False);
+                Py_RETURN_FALSE;
             }
         } else {
-            Py_XDECREF(arrayShape);
             bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
 
         unsigned nDims = 1;
@@ -489,21 +498,21 @@ extern "C" {
             elemType = ArrayShape::CDOUBLE;
         if (elemType == ArrayShape::BINARY) {
             bsp_typeError("invalid dtype for bsp.createArray(arrayPath,dtype,arrayShape)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         uint64_t elemSize = ArrayShape::elementSize(elemType);
         try {
             LocalArray *localArray = new LocalArray(std::string(arrayPath), elemType, elemSize, nDims, dimSize);
             if (localArray == NULL) {
                 bsp_runtimeError("failed to call bsp.createArray(arrayPath,dtype,arrayShape)");
-                return Py_BuildValue("O",Py_False);
+                Py_RETURN_FALSE;
             }
             runtime_->setObject(std::string(arrayPath), localArray);
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     // OK = bsp.delete(up-to-10-paths)
@@ -522,7 +531,7 @@ extern "C" {
                 obj + 9);
         if (!ok) {
             bsp_typeError("invalid dtype for bsp.delete(up-to-10-paths-or-indsets)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         for (int i = 0; i < 10; ++i) {
             if (NULL == obj[i])
@@ -550,10 +559,10 @@ extern "C" {
                 std::stringstream ssErr;
                 ssErr << "failed to delete " << obj[i] << ": " << e.what();
                 bsp_runtimeError(ssErr.str());
-                return Py_BuildValue("O",Py_False);
+                Py_RETURN_FALSE;
             }
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     // OK = bsp.share(up-to-10-array-Paths)
@@ -572,7 +581,7 @@ extern "C" {
                 path + 9);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.share(up-to-10-paths)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         std::vector<std::string> arrayPaths;
         for (int i = 0; i < 10; ++i) {
@@ -584,9 +593,9 @@ extern "C" {
             runtime_->share(arrayPaths);
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     // OK = bsp.globalize(procStart,gridShape,up-to-10-array-Paths)
@@ -609,11 +618,10 @@ extern "C" {
                 path + 7,
                 path + 8,
                 path + 9);
-        Py_XINCREF(objGridShape);
+        PyRef refGridShape(objGridShape);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.globalize(procStart,gridShape,up-to-10-array-paths)");
-            Py_XDECREF(objGridShape);
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         ok = PyArg_ParseTuple(objGridShape,"k|kkkkkk:bsp.globalize.extractGridShape",
                 (unsigned long *)(gridDimSize + 0),
@@ -623,10 +631,9 @@ extern "C" {
                 (unsigned long *)(gridDimSize + 4),
                 (unsigned long *)(gridDimSize + 5),
                 (unsigned long *)(gridDimSize + 6));
-        Py_XDECREF(objGridShape);
         if (!ok) {
             bsp_typeError("invalid gridShape for bsp.globalize(procStart,gridShape,up-to-10-array-paths)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         for (unsigned iDim = 0; iDim < 7; ++iDim) {
             if (gridDimSize[iDim] > 0)
@@ -644,9 +651,9 @@ extern "C" {
             runtime_->globalize(arrayPaths,nGridDims,gridDimSize,procStart);
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     // OK = bsp.privatize(up-to-10-array-paths)
@@ -665,7 +672,7 @@ extern "C" {
                 path + 9);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.privatize(up-to-10-paths)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         std::vector<std::string> arrayPaths;
         for (int i = 0; i < 10; ++i) {
@@ -677,9 +684,9 @@ extern "C" {
             runtime_->privatize(arrayPaths);
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     IndexSet *bsp_regionTensor(unsigned n, PyObject **lowerObject, PyObject **upperObject) {
@@ -816,7 +823,7 @@ extern "C" {
             ++i;
         idToIndexSet_[i] = indexSet;
         indexSetToID_[indexSet] = i;
-        return Py_BuildValue("i",i);
+        return PyRetVal(Py_BuildValue("i",i));
     }
 
     static PyObject *bsp_createRegionSet(PyObject *self, PyObject *args) {
@@ -857,7 +864,7 @@ extern "C" {
             ++i;
         idToIndexSet_[i] = indexSet;
         indexSetToID_[indexSet] = i;
-        return Py_BuildValue("i",i);
+        return PyRetVal(Py_BuildValue("i",i));
     }
 
     // indexCount = bsp.indexCount(indexSet)
@@ -866,20 +873,22 @@ extern "C" {
         int ok = PyArg_ParseTuple(args, "i:bsp.indexCount",&i);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.indexCount(indexSet)");
-            return Py_BuildValue("i",-1);
+            return PyRetVal(Py_BuildValue("i",-1));
         }
         try {
+            PyObject *retval = NULL;
             if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
                 IndexSet *indexSet = idToIndexSet_[i];
                 if (indexSet)
-                    return Py_BuildValue("i",indexSet->getNumberOfIndices());
+                    retval = Py_BuildValue("i",indexSet->getNumberOfIndices());
                 else
-                    return Py_BuildValue("i",0);
+                    retval = Py_BuildValue("i",0);
             } else 
-                return Py_BuildValue("i",0);
+                retval = Py_BuildValue("i",0);
+            return PyRetVal(retval);
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("i",-1);
+            return PyRetVal(Py_BuildValue("i",-1));
         }
     }
 
@@ -889,20 +898,22 @@ extern "C" {
         int ok = PyArg_ParseTuple(args, "i:bsp.regionCount",&i);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.regionCount(indexSet)");
-            return Py_BuildValue("i",-1);
+            return PyRetVal(Py_BuildValue("i",-1));
         }
         try {
+            PyObject *retval = NULL;
             if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
                 IndexSet *indexSet = idToIndexSet_[i];
                 if (indexSet)
-                    return Py_BuildValue("i",indexSet->getNumberOfRegions());
+                    retval = Py_BuildValue("i",indexSet->getNumberOfRegions());
                 else
-                    return Py_BuildValue("i",0);
+                    retval =  Py_BuildValue("i",0);
             } else 
-                return Py_BuildValue("i",0);
+                retval = Py_BuildValue("i",0);
+            return PyRetVal(retval);
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("i",-1);
+            return PyRetVal(Py_BuildValue("i",-1));
         }
     }
 
@@ -912,7 +923,7 @@ extern "C" {
         int ok = PyArg_ParseTuple(args, "i:bsp.activateIterator",&i);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.activateIterator(indexSet)");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         try {
             if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
@@ -921,9 +932,9 @@ extern "C" {
             }
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     // OK = bsp.resetIterator(optionalIndexSet)
@@ -932,7 +943,7 @@ extern "C" {
         int ok = PyArg_ParseTuple(args, "|i:bsp.resetIterator",&i);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.resetIterator()");
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
         try {
             if (i < 0) {
@@ -940,7 +951,7 @@ extern "C" {
                     activeIndexSet_->curr().reset();
                 else {
                     bsp_runtimeError("no active index set when calling bsp.resetIterator()");
-                    return Py_BuildValue("O",Py_False);
+                    Py_RETURN_FALSE;
                 }
             } else if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
                 IndexSet *indexSet = idToIndexSet_[i];
@@ -948,9 +959,9 @@ extern "C" {
             }
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            Py_RETURN_FALSE;
         }
-        return Py_BuildValue("O",Py_True);
+        Py_RETURN_TRUE;
     }
 
     PyObject *bsp_buildIndex(IndexSet *indexSet) {
@@ -962,44 +973,44 @@ extern "C" {
         }
         switch (nDims) {
             case 1:
-                return Py_BuildValue("k",(unsigned long)index[0]);
+                return PyRetVal(Py_BuildValue("k",(unsigned long)index[0]));
             case 2:
-                return Py_BuildValue("(kk)",
+                return PyRetVal(Py_BuildValue("(kk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1]
-                        );
+                        ));
             case 3:
-                return Py_BuildValue("(kkk)",
+                return PyRetVal(Py_BuildValue("(kkk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1],
                         (unsigned long)index[2]
-                        );
+                        ));
             case 4:
-                return Py_BuildValue("(kkkk)",
+                return PyRetVal(Py_BuildValue("(kkkk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1],
                         (unsigned long)index[2],
                         (unsigned long)index[3]
-                        );
+                        ));
             case 5:
-                return Py_BuildValue("(kkkkk)",
+                return PyRetVal(Py_BuildValue("(kkkkk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1],
                         (unsigned long)index[2],
                         (unsigned long)index[3],
                         (unsigned long)index[4]
-                        );
+                        ));
             case 6:
-                return Py_BuildValue("(kkkkkk)",
+                return PyRetVal(Py_BuildValue("(kkkkkk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1],
                         (unsigned long)index[2],
                         (unsigned long)index[3],
                         (unsigned long)index[4],
                         (unsigned long)index[5]
-                        );
+                        ));
             default:
-                return Py_BuildValue("(kkkkkkk)",
+                return PyRetVal(Py_BuildValue("(kkkkkkk)",
                         (unsigned long)index[0],
                         (unsigned long)index[1],
                         (unsigned long)index[2],
@@ -1007,7 +1018,7 @@ extern "C" {
                         (unsigned long)index[4],
                         (unsigned long)index[5],
                         (unsigned long)index[6]
-                        );
+                        ));
         }
     }
 
@@ -1121,7 +1132,7 @@ extern "C" {
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.requestTo(clientArrayPath,"
                     "serverArrayPath,indexSet,optionalServerProcID)");
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         try {
             LocalArray *clientArray = runtime_->getObject(clientPath)->_localArray();
@@ -1129,19 +1140,19 @@ extern "C" {
             if (ARRAY != nobjServer->getType()) {
                 bsp_typeError("invalid serverArrayPath for bsp.requestTo("
                         "clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                return Py_BuildValue("O",Py_False);
+                return PyRetVal(Py_BuildValue("O",Py_False));
             }
             if (idToIndexSet_.find(indexSetID) == idToIndexSet_.end()) {
                 PyErr_SetString(PyExc_TypeError, "invalid indexSet for bsp.requestTo("
                         "clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                return Py_BuildValue("O",Py_False);
+                return PyRetVal(Py_BuildValue("O",Py_False));
             }
             if (nobjServer->isGlobal()) {
                 if (serverProcID >= 0) {
                     bsp_typeError( 
                             "serverProcID not required for local shared client "
                             "in bsp.requestTo(clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                    return Py_BuildValue("O",Py_False);
+                    return PyRetVal(Py_BuildValue("O",Py_False));
                 } else {
                     runtime_->requestFrom(*nobjServer->_globalArray(),
                             *idToIndexSet_[indexSetID],
@@ -1151,7 +1162,7 @@ extern "C" {
                 if (serverProcID < 0) {
                     bsp_typeError("serverProcID required for global client"
                             " in bsp.requestTo(clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                    return Py_BuildValue("O",Py_False);
+                    return PyRetVal(Py_BuildValue("O",Py_False));
                 } else {
                     runtime_->requestFrom(*nobjServer->_localArray(), (uint64_t)serverProcID,
                             *idToIndexSet_[indexSetID],
@@ -1160,9 +1171,9 @@ extern "C" {
             }
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
-        return Py_BuildValue("O",Py_True);
+        return PyRetVal(Py_BuildValue("O",Py_True));
     }
 
     // OK = bsp.updateFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)
@@ -1177,7 +1188,7 @@ extern "C" {
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.requestFrom(clientArrayPath,op,"
                     "serverArrayPath,indexSet,optionalServerProcID)");
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         try {
             LocalArray *clientArray = runtime_->getObject(clientPath)->_localArray();
@@ -1185,7 +1196,7 @@ extern "C" {
             if (ARRAY != nobjServer->getType()) {
                 bsp_typeError("invalid serverArrayPath for bsp.requestFrom("
                         "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return Py_BuildValue("O",Py_False);
+                return PyRetVal(Py_BuildValue("O",Py_False));
             }
             if (0 == strcmp(op, "="))
                 opID = LocalArray::OPID_ASSIGN;
@@ -1206,19 +1217,19 @@ extern "C" {
             else {
                 bsp_typeError("unrecognized op for bsp.requestFrom("
                         "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return Py_BuildValue("O",Py_False);
+                return PyRetVal(Py_BuildValue("O",Py_False));
             }
             if (idToIndexSet_.find(indexSetID) == idToIndexSet_.end()) {
                 PyErr_SetString(PyExc_TypeError, "invalid indexSet for bsp.requestFrom("
                         "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return Py_BuildValue("O",Py_False);
+                return PyRetVal(Py_BuildValue("O",Py_False));
             }
             if (nobjServer->isGlobal()) {
                 if (serverProcID >= 0) {
                     bsp_typeError( 
                             "serverProcID not required for local shared client "
                             "in bsp.requestFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                    return Py_BuildValue("O",Py_False);
+                    return PyRetVal(Py_BuildValue("O",Py_False));
                 } else {
                     runtime_->requestTo(*nobjServer->_globalArray(),
                             *idToIndexSet_[indexSetID],
@@ -1228,7 +1239,7 @@ extern "C" {
                 if (serverProcID < 0) {
                     bsp_typeError("serverProcID required for global client"
                             " in bsp.requestFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                    return Py_BuildValue("O",Py_False);
+                    return PyRetVal(Py_BuildValue("O",Py_False));
                 } else {
                     runtime_->requestTo(*nobjServer->_localArray(), (uint64_t)serverProcID,
                             *idToIndexSet_[indexSetID],
@@ -1237,9 +1248,9 @@ extern "C" {
             }
         } catch (const std::exception& e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
-        return Py_BuildValue("O",Py_True);
+        return PyRetVal(Py_BuildValue("O",Py_True));
     }
 
     // OK = bsp.toProc(procID,up-to-10-local-arrays)
@@ -1260,7 +1271,7 @@ extern "C" {
                 path + 9);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.toProc(procID,up-to-10-local-arrays)");
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         try {
             for (int i = 0; i < 10; ++i) {
@@ -1270,9 +1281,9 @@ extern "C" {
             }
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
-        return Py_BuildValue("O",Py_True);
+        return PyRetVal(Py_BuildValue("O",Py_True));
     }
 
     void bsp_extractImported(NamedObject *nobj, std::string prefix, PyObject *pyDict) {
@@ -1303,31 +1314,27 @@ extern "C" {
         char *tag = NULL;
         PyObject *objSendMatrix = NULL;
         int ok = PyArg_ParseTuple(args, "s|O:bsp.sync", &tag, &objSendMatrix);
-        Py_XINCREF(objSendMatrix);
+        PyRef refSendMatrix(objSendMatrix);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.sync(tag,optionalSendMatrix)");
-            Py_XDECREF(objSendMatrix);
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
         try {
             if (NULL != objSendMatrix) {
                 if (!PyArray_Check(objSendMatrix)) {
                     bsp_typeError("invalid sendMatrix for bsp.sync(tag,optionalSendMatrix)");
-                    Py_XDECREF(objSendMatrix);
-                    return Py_BuildValue("O",Py_False);
+                    return PyRetVal(Py_BuildValue("O",Py_False));
                 } else {
                     PyArrayObject *arrSendMatrix = (PyArrayObject *)objSendMatrix;
                     int nDims = PyArray_NDIM(arrSendMatrix);
                     if (2 != nDims || !PyArray_ISBOOL(arrSendMatrix)) {
                         bsp_typeError("invalid sendMatrix for bsp.sync(tag,optionalSendMatrix)");
-                        Py_XDECREF(objSendMatrix);
-                        return Py_BuildValue("O",Py_False);
+                        return PyRetVal(Py_BuildValue("O",Py_False));
                     } else {
                         if (PyArray_DIM(arrSendMatrix,0) != nProcs_ ||
                                 PyArray_DIM(arrSendMatrix,1) != nProcs_) {
                             bsp_typeError("invalid sendMatrix for bsp.sync(tag,optionalSendMatrix)");
-                            Py_XDECREF(objSendMatrix);
-                            return Py_BuildValue("O",Py_False);
+                            return PyRetVal(Py_BuildValue("O",Py_False));
                         } else {
                             bool *sendMatrix = new bool[nProcs_ * nProcs_];
                             bool *data = (bool *)PyArray_DATA(arrSendMatrix);
@@ -1338,7 +1345,6 @@ extern "C" {
                                     ++k;
                                 }
                             }
-                            Py_XDECREF(objSendMatrix);
                             runtime_->exchange(sendMatrix, tag);
                             delete[] sendMatrix;
                         }
@@ -1380,9 +1386,9 @@ extern "C" {
             
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
-            return Py_BuildValue("O",Py_False);
+            return PyRetVal(Py_BuildValue("O",Py_False));
         }
-        return Py_BuildValue("O",Py_True);
+        return PyRetVal(Py_BuildValue("O",Py_True));
     }
 
     // {partnerID1, ..., partnerIDk} = bsp.async(tag, optionalStopping)
@@ -1430,7 +1436,6 @@ extern "C" {
             Py_RETURN_NONE;
         }
         PyObject *result = PySet_New(NULL);
-        //Py_XINCREF(result);
         if (procID == runtime_->getMyProcessID()) {
             uint64_t n = runtime_->sizeOfManifest();
             for (uint64_t i = 0; i < n; ++ i)
@@ -1518,7 +1523,7 @@ extern "C" {
     static PyObject *bsp_toc(PyObject *self, PyObject *args) {
         gettimeofday(&tvStop_, NULL);
         double result = tvStop_.tv_sec - tvStart_.tv_sec + 1e-6 * (tvStop_.tv_usec - tvStart_.tv_usec);
-        return Py_BuildValue("d",result);
+        return PyRetVal(Py_BuildValue("d",result));
     }
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
@@ -1535,10 +1540,9 @@ extern "C" {
             bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_RETURN_NONE;
         }
-        Py_XINCREF(objParam);
+        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient);
         if (!PyArray_Check(objParam)) {
             bsp_typeError("invalid params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objParam;
@@ -1552,7 +1556,6 @@ extern "C" {
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
             bsp_typeError("invalid type of params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
         npy_intp *dimSize = PyArray_DIMS(numpyArray);
@@ -1574,14 +1577,12 @@ extern "C" {
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
                 bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
                 bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             funValue = *(FunValue *) uAddress;
@@ -1593,17 +1594,14 @@ extern "C" {
             try {
                 PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
                 PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
-                Py_XDECREF(myParam);
                 if (objAddress == NULL) {
                     bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                    Py_XDECREF(objParam);
                     Py_RETURN_NONE;
                 }
                 unsigned long long uAddress = 0;
                 ok = PyArg_Parse(objAddress, "K", &uAddress);
                 if (!ok) {
                     bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                    Py_XDECREF(objParam);
                     Py_RETURN_NONE;
                 }
                 funGradient = *(FunGradient *) uAddress;
@@ -1672,11 +1670,9 @@ extern "C" {
             result = cg.value();
         } else {
             bsp_runtimeError("unknown optMethod for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         } 
-        Py_XDECREF(objParam);
-        return Py_BuildValue("d", result);
+        return PyRetVal(Py_BuildValue("d", result));
     }
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
@@ -1694,12 +1690,12 @@ extern "C" {
             bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
             Py_RETURN_NONE;
         }
-        Py_XINCREF(objParam);
+        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient);
         if (!PyArray_Check(objParam)) {
             bsp_typeError("invalid params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
+
         PyArrayObject *numpyArray = (PyArrayObject *)objParam;
         npy_intp *strides = PyArray_STRIDES(numpyArray);
         int nDims = PyArray_NDIM(numpyArray);
@@ -1711,7 +1707,6 @@ extern "C" {
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
             bsp_typeError("invalid type of params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         }
         npy_intp *dimSize = PyArray_DIMS(numpyArray);
@@ -1733,14 +1728,12 @@ extern "C" {
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
                 bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
                 bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                Py_XDECREF(objParam);
                 Py_RETURN_NONE;
             }
             funValue = *(FunValue *) uAddress;
@@ -1755,14 +1748,12 @@ extern "C" {
                 Py_XDECREF(myParam);
                 if (objAddress == NULL) {
                     bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                    Py_XDECREF(objParam);
                     Py_RETURN_NONE;
                 }
                 unsigned long long uAddress = 0;
                 ok = PyArg_Parse(objAddress, "K", &uAddress);
                 if (!ok) {
                     bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-                    Py_XDECREF(objParam);
                     Py_RETURN_NONE;
                 }
                 funGradient = *(FunGradient *) uAddress;
@@ -1794,6 +1785,7 @@ extern "C" {
                 lbfgs.setPenaltyLevel(dPenaltyLevel, true);
             }
             lbfgs.maximize();
+
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
             }
@@ -1833,11 +1825,9 @@ extern "C" {
             result = cg.value();
         } else {
             bsp_runtimeError("unknown optMethod for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
-            Py_XDECREF(objParam);
             Py_RETURN_NONE;
         } 
-        Py_XDECREF(objParam);
-        return Py_BuildValue("d", result);
+        return PyRetVal(Py_BuildValue("d", result));
     }
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
@@ -1853,6 +1843,8 @@ extern "C" {
             bsp_typeError("invalid arguments for bsp.findFreqSet(sequence, fileName, threshold, optTemplate)");
             Py_RETURN_FALSE;
         }
+
+        PyRef refSeq(objSeq);
         bool useTmpl2 = (t20 != 0) || (t21 != 0);
         bool useTmpl3 = (t30 != 0) || (t31 != 0) || (t32 != 0);
         if (useTmpl2 && useTmpl3) 
@@ -1861,10 +1853,8 @@ extern "C" {
             Py_RETURN_FALSE;
         }
 
-        Py_XINCREF(objSeq);
         if (!PyArray_Check(objSeq)) {
             bsp_typeError("invalid sequence for bsp.findFreqSet(sequence, fileName, threshold, optTemplate)");
-            Py_XDECREF(objSeq);
             Py_RETURN_FALSE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
@@ -1878,7 +1868,6 @@ extern "C" {
         }
         if (!PyArray_ISINTEGER(numpyArray) || elemSize != 2) {
             bsp_typeError("invalid type of sequence for bsp.findFreqSet(sequence, fileName, threshold, optTemplate)");
-            Py_XDECREF(objSeq);
             Py_RETURN_FALSE;
         }
 
@@ -1896,7 +1885,6 @@ extern "C" {
         } else {
             apriori.scan(nUnits, x, multiThread != 0);
         }
-        Py_XDECREF(objSeq);
         apriori.saveToFile(strFileName);
         Py_RETURN_TRUE;
     }
@@ -1912,10 +1900,9 @@ extern "C" {
             Py_RETURN_FALSE;
         }
 
-        Py_XINCREF(objSeq);
+        PyRef refSeq(objSeq), refFreq(objFreq), refBE(objBE);
         if (!PyArray_Check(objSeq)) {
             bsp_typeError("invalid sequence for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
             Py_RETURN_FALSE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
@@ -1929,7 +1916,6 @@ extern "C" {
         }
         if (!PyArray_ISINTEGER(numpyArray) || elemSize != 2) {
             bsp_typeError("invalid type of sequence for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
             Py_RETURN_FALSE;
         }
 
@@ -1940,11 +1926,8 @@ extern "C" {
         }
         unsigned short *x = (unsigned short *)PyArray_BYTES(numpyArray);
 
-        Py_XINCREF(objFreq);
         if (!PyArray_Check(objFreq)) {
             bsp_typeError("invalid freq for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
-            Py_XDECREF(objFreq);
             Py_RETURN_FALSE;
         }
         PyArrayObject *freqArray = (PyArrayObject *)objFreq;
@@ -1964,18 +1947,12 @@ extern "C" {
         if (!PyArray_ISINTEGER(freqArray) || elemSizeFreq != 4 || nFreq != nUnits * 4) {
             std::cout << PyArray_ISINTEGER(freqArray) << ", " << elemSizeFreq << ", " << nFreq << ", " << nUnits << std::endl;
             bsp_typeError("invalid type of freq for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
-            Py_XDECREF(objFreq);
             Py_RETURN_FALSE;
         }
         int *freq = (int *)PyArray_BYTES(freqArray);
 
-        Py_XINCREF(objBE);
         if (!PyArray_Check(objBE)) {
             bsp_typeError("invalid freq for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
-            Py_XDECREF(objFreq);
-            Py_XDECREF(objBE);
             Py_RETURN_FALSE;
         }
         PyArrayObject *beArray = (PyArrayObject *) objBE ;
@@ -1994,9 +1971,6 @@ extern "C" {
         }
         if (!PyArray_ISFLOAT(beArray) || elemSizeBE != 8 || nBE != nUnits * 8) {
             bsp_typeError("invalid type of be for bsp.getFreq(freq, be, sequence, fileName)");
-            Py_XDECREF(objSeq);
-            Py_XDECREF(objFreq);
-            Py_XDECREF(objBE);
             Py_RETURN_FALSE;
         }
         double *be = (double *)PyArray_BYTES(beArray);
@@ -2006,9 +1980,6 @@ extern "C" {
         apriori.getFreq(nUnits, x, freq, freq + nUnits, freq + 2 * nUnits, freq + 3 * nUnits,
                 be, be + nUnits, be + 2 * nUnits, be + 3 * nUnits,
                 be + 4 * nUnits, be + 5 * nUnits, be + 6 * nUnits, be + 7 * nUnits);
-        Py_XDECREF(objSeq);
-        Py_XDECREF(objFreq);
-        Py_XDECREF(objBE);
         Py_RETURN_TRUE;
     }
 
@@ -2023,6 +1994,7 @@ extern "C" {
             bsp_typeError("invalid arguments for bsp.getFreqIndex");
             Py_RETURN_NONE;
         }
+        PyRef refResult(objResult), refSeq(objSeq);
         bool useTmpl2 = (t20 != 0) || (t21 != 0);
         bool useTmpl3 = (t30 != 0) || (t31 != 0) || (t32 != 0);
         if (useTmpl2 && useTmpl3) 
@@ -2031,12 +2003,8 @@ extern "C" {
             Py_RETURN_NONE;
         }
 
-        Py_XINCREF(objResult);
-        Py_XINCREF(objSeq);
         if (!PyArray_Check(objResult)) {
             bsp_typeError("invalid result array for bsp.getFreqIndex");
-            Py_XDECREF(objResult);
-            Py_XDECREF(objSeq);
             Py_RETURN_NONE;
         }
         PyArrayObject *resultArray = (PyArrayObject *)objResult;
@@ -2050,8 +2018,6 @@ extern "C" {
         }
         if (elemSizeOfResult != 4 || !PyArray_ISINTEGER(resultArray)) {
             bsp_typeError("Invalid element type of the result array for bsp.findFreqIndex");
-            Py_XDECREF(objResult);
-            Py_XDECREF(objSeq);
             Py_RETURN_NONE;
         }
         npy_intp *dimSizeOfResult = PyArray_DIMS(resultArray);
@@ -2062,8 +2028,6 @@ extern "C" {
         int *result = (int *)PyArray_BYTES(resultArray);
         if (!PyArray_Check(objSeq)) {
             bsp_typeError("invalid sequence for bsp.getFreqIndex");
-            Py_XDECREF(objResult);
-            Py_XDECREF(objSeq);
             Py_RETURN_NONE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objSeq;
@@ -2082,8 +2046,6 @@ extern "C" {
         }
         if (!PyArray_ISINTEGER(numpyArray) || elemSize != 2 || nUnits != n) {
             bsp_typeError("invalid element type/size of sequence for bsp.getFreqIndex");
-            Py_XDECREF(objResult);
-            Py_XDECREF(objSeq);
             Py_RETURN_NONE;
         }
         unsigned short *x = (unsigned short *)PyArray_BYTES(numpyArray);
@@ -2095,42 +2057,9 @@ extern "C" {
         } else if (useTmpl3) {
             retval = apriori.getIndex3(n, t30, t31, t32, x, start, result);
         }
-        Py_XDECREF(objResult);
-        Py_XDECREF(objSeq);
-        return Py_BuildValue("i", retval);
+        return PyRetVal(Py_BuildValue("i", retval));
     }
 
-    //static PyObject *bsp_repeat(PyObject *self, PyObject *args) {
-        //PyObject *funcPtr = NULL;
-        //char *strParam = NULL;
-        //int times = 0;
-        //int ok = PyArg_ParseTuple(args, "Osi:bsp.repeat", &funcPtr, &strParam, &times);
-        //if (!ok) {
-            //bsp_typeError("invalid arguments (1) for bsp.repeat(function, params, repeatTimes)");
-            //Py_RETURN_NONE;
-        //}
-
-        //typedef void (*MyFunc)(char *); 
-        //PyObject *param = Py_BuildValue("(O)", funcPtr);
-        //PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, param);
-        //Py_XDECREF(param);
-        //if (objAddress == NULL) {
-            //bsp_typeError("invalid arguments (2) for bsp.repeat(function, params, repeatTimes)");
-            //Py_RETURN_NONE;
-        //}
-        //unsigned long long uAddress = 0;
-        //ok = PyArg_Parse(objAddress, "K", &uAddress);
-        //if (!ok) {
-            //bsp_typeError("invalid arguments (3) for bsp.repeat(function, params, repeatTimes)");
-            //Py_RETURN_NONE;
-        //}
-        //MyFunc myFunc = *(MyFunc *) uAddress;
-        //for (int t = 0; t < times; ++ t) {
-            //myFunc(strParam);
-        //}
-
-        //Py_RETURN_NONE;
-    //}
 
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
