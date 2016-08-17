@@ -1988,7 +1988,7 @@ extern "C" {
         PyObject *objSeq = NULL, *objResult = NULL;
         char *strFileName = NULL;
         int t20 = 0, t21 = 0, t30 = 0, t31 = 0, t32 = 0, start = 0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|(ii)(iii): bsp.getFreqIndex", (char **)kwlist,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOs|(ii)(iii)i: bsp.getFreqIndex", (char **)kwlist,
                 &objResult, &objSeq, &strFileName, &t20, &t21, &t30, &t31, &t32, &start);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.getFreqIndex");
