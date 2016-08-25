@@ -1,6 +1,7 @@
 #include "BSPAlgGradientBasedOptimization.hpp"
 #include <stdexcept>
 #include <cmath>
+#include <cassert>
 
 using namespace BSP::Algorithm;
 
@@ -14,11 +15,11 @@ GradientBasedOptimization::GradientBasedOptimization(unsigned long nParams, FunV
 
     _coParams = NULL;
     _coMultipliers = NULL;
-    _proximity = NULL;
     _penaltyLevel = 0.0;
     _coLevel = 0.0;
-    _proximityLevel = 0.0;
     _penalty = PENALTY_NONE;
+    _coStart = 0;
+    _coEnd = nParams;
 }
 
 GradientBasedOptimization::~GradientBasedOptimization() {
@@ -28,8 +29,6 @@ GradientBasedOptimization::~GradientBasedOptimization() {
         delete []_coParams;
     if (_coMultipliers)
         delete []_coMultipliers;
-    if (_proximity)
-        delete []_proximity;
 }
 
 void GradientBasedOptimization::setPenaltyLevel(double level, bool toMaximize) {
@@ -49,6 +48,8 @@ void GradientBasedOptimization::setCoLevel(double level, bool toMaximize) {
 }
 
 void GradientBasedOptimization::setCoParams(double *coParams) {
+    if (NULL == coParams)
+        return;
     if (NULL == _coParams) {
         _coParams = new double[_nParams];
     }
@@ -58,6 +59,8 @@ void GradientBasedOptimization::setCoParams(double *coParams) {
 }
 
 void GradientBasedOptimization::setCoMultipliers(double *multipliers) {
+    if (NULL == multipliers)
+        return;
     if (NULL == _coMultipliers) {
         _coMultipliers = new double[_nParams];
     }
@@ -66,27 +69,32 @@ void GradientBasedOptimization::setCoMultipliers(double *multipliers) {
     }
 }
 
-void GradientBasedOptimization::setProximity(double *proximity) {
-    if (NULL == _proximity) {
-        _proximity = new double[_nParams];
-    }
-    for (unsigned long i = 0; i < _nParams; ++ i) {
-        _proximity[i] = proximity[i];
-    }
-}
-
-void GradientBasedOptimization::setProximityLevel(double proximityLevel, bool toMaximize) {
-    if (toMaximize) {
-        _proximityLevel = -fabs(proximityLevel);
+void GradientBasedOptimization::setCoRange(long i) {
+    if (i == 0) {
+        _coStart = 0;
+        _coEnd = _nParams;
+    } else if (i > 0) {
+        _coStart = 0;
+        _coEnd = i;
+        if (_coEnd > _nParams)
+            _coEnd = _nParams;
     } else {
-        _proximityLevel = fabs(proximityLevel);
+        _coEnd = _nParams;
+        _coStart = 0;
+        if ((unsigned long)(-i) < _nParams) {
+            _coStart = _nParams + i;
+            assert(_coStart < _coEnd);
+        }
     }
 }
 
+void GradientBasedOptimization::setCoRange(unsigned long start, unsigned long end) {
+    _coStart = start;
+    _coEnd = end;
+}
 
 void GradientBasedOptimization::f() {
     Optimization::f();
-    _f += proximity(_params);
     _f += concensus(_params);
     switch (_penalty) {
         case PENALTY_LOGSUM:
@@ -105,7 +113,6 @@ void GradientBasedOptimization::f() {
 
 void GradientBasedOptimization::newF() {
     Optimization::newF();
-    _newF += proximity(_newParams);
     _newF += concensus(_newParams);
     switch (_penalty) {
         case PENALTY_LOGSUM:
@@ -128,7 +135,6 @@ void GradientBasedOptimization::g() {
     } else {
         richardson(_params, _g);
     }
-    applyProximity(_params, _g);
     applyConcensus(_params, _g);
     switch (_penalty) {
         case PENALTY_LOGSUM:
@@ -151,7 +157,6 @@ void GradientBasedOptimization::newG() {
     } else {
         richardson(_newParams, _newG);
     }
-    applyProximity(_newParams, _newG);
     applyConcensus(_newParams, _newG);
     switch (_penalty) {
         case PENALTY_LOGSUM:
@@ -272,19 +277,10 @@ void GradientBasedOptimization::applyL2Penalty(double *params, double *result) {
     }
 }
 
-void GradientBasedOptimization::applyProximity(double *params, double *result) {
-    if (NULL == _proximity || 0 == _proximityLevel)
-        return;
-    for (unsigned long i = 0; i < _nParams; ++ i) {
-        double d = params[i] - _proximity[i];
-        result[i] += _proximityLevel * d;
-    }
-}
-
 void GradientBasedOptimization::applyConcensus(double *params, double *result) {
     if (NULL == _coParams || NULL == _coMultipliers)
         return;
-    for (unsigned long i = 0; i < _nParams; ++ i) {
+    for (unsigned long i = _coStart; i < _coEnd; ++ i) {
         double d = params[i] - _coParams[i];
         result[i] += _coLevel * d + _coMultipliers[i];
     }
@@ -317,23 +313,11 @@ double GradientBasedOptimization::penaltyL2(double *params) {
     return result;
 }
 
-double GradientBasedOptimization::proximity(double *params) {
-    if (NULL == _proximity || 0 == _proximityLevel)
-        return 0.0;
-    double result = 0.0;
-    for (unsigned long i = 0; i < _nParams; ++ i) {
-        double d = params[i] - _proximity[i];
-        result += d * d;
-    }
-    result *= 0.5 * _proximityLevel;
-    return result;
-}
-
 double GradientBasedOptimization::concensus(double *params) {
     if (NULL == _coParams || NULL == _coMultipliers)
         return 0.0;
     double result = 0.0;
-    for (unsigned long i = 0; i < _nParams; ++ i) {
+    for (unsigned long i = _coStart; i < _coEnd; ++ i) {
         double d = params[i] - _coParams[i];
         result += (0.5 * _coLevel * d + _coMultipliers[i]) * d;
     }

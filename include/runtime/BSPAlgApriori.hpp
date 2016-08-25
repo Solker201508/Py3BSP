@@ -39,6 +39,9 @@ namespace BSP {
                 int getIndex4(unsigned long n, int pos1, int pos2, int pos3, int pos4, unsigned short *x, int start, int *index);
                 void saveToFile(char *fileName);
                 void loadFromFile(char *fileName);
+                unsigned long mostFrequent(unsigned short *word);
+                double largestBE();
+                unsigned long freq(unsigned short word);
         };
     }
 }

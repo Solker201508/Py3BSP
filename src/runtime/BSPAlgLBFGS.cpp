@@ -78,6 +78,10 @@ void LBFGS::optimize() {
         LineSearch lineSearch(_nParams, _funValue, _maxIter, _params, _direction);
         lineSearch.setPenalty(_penalty);
         lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
+        lineSearch.setCoLevel(_coLevel, _toMaximize);
+        lineSearch.setCoParams(_coParams);
+        lineSearch.setCoMultipliers(_coMultipliers);
+        lineSearch.setCoRange(_coStart, _coEnd);
         if (_toMaximize)
             lineSearch.maximize();
         else
@@ -93,7 +97,7 @@ void LBFGS::optimize() {
         }
         updateDf();
         //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
-        //std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+        std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
         if (_newF != _newF)
             break;
         if (_toMaximize? _newF <= _f : _newF >= _f) {
@@ -104,6 +108,10 @@ void LBFGS::optimize() {
             LineSearch restartedLineSearch(_nParams, _funValue, _maxIter, _params, _direction);
             restartedLineSearch.setPenalty(_penalty);
             restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
+            restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
+            restartedLineSearch.setCoLevel(_coLevel, _toMaximize);
+            restartedLineSearch.setCoParams(_coParams);
+            restartedLineSearch.setCoRange(_coStart, _coEnd);
             if (_toMaximize)
                 restartedLineSearch.maximize();
             else
@@ -118,12 +126,13 @@ void LBFGS::optimize() {
                 _newG2 += _newG[i] * _newG[i];
             }
             updateDf();
-            //std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+            std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
             if (_newF != _newF)
                 break;
-            if (_toMaximize? _newF <= _f : _newF >= _f)
+            if (_newF == _f)
                 break;
-            if (_iter > 3 && reductionScale() < _tol)
+            if (_toMaximize? _newF - 1e-5 * fabs(_newF) <= _f + 1e-5 * fabs(_f)
+                    : _newF + 1e-5 * fabs(_newF) >= _f - 1e-5 * fabs(_f))
                 break;
         }
         //double rs = reductionScale();

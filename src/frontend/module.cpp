@@ -1528,21 +1528,23 @@ extern "C" {
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", NULL};
-        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", NULL};
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL;;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        double dPenaltyLevel = 1;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd: bsp.minimize", (char **)kwlist, 
+        double dPenaltyLevel = 1, dCoLevel = 1;
+        int concensusRange = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)i: bsp.minimize", (char **)kwlist, 
                 &objParam, &objFunValue, &objFunGradient,
-                &kMaxIter, &kMLim, &strPenalty, &strMethod,&dPenaltyLevel);
+                &kMaxIter, &kMLim, &strPenalty, &strMethod,&dPenaltyLevel,
+                &dCoLevel, &objCoParams, &objCoMultipliers, &concensusRange);
         if (!ok) {
-            bsp_typeError("invalid arguments for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid arguments for bsp.minimize()");
             Py_RETURN_NONE;
         }
-        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient);
+        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient), refCoParams(objCoParams), refCoMultipliers(objCoMultipliers);
         if (!PyArray_Check(objParam)) {
-            bsp_typeError("invalid params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid params for bsp.minimize()");
             Py_RETURN_NONE;
         }
         PyArrayObject *numpyArray = (PyArrayObject *)objParam;
@@ -1555,7 +1557,7 @@ extern "C" {
             elemSize = strides[nDims - 1];
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
-            bsp_typeError("invalid type of params for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid type of params for bsp.minimize()");
             Py_RETURN_NONE;
         }
         npy_intp *dimSize = PyArray_DIMS(numpyArray);
@@ -1576,13 +1578,13 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                bsp_typeError("invalid funValue for bsp.minimize()");
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                bsp_typeError("invalid funValue for bsp.minimize()");
                 Py_RETURN_NONE;
             }
             funValue = *(FunValue *) uAddress;
@@ -1595,19 +1597,83 @@ extern "C" {
                 PyObject *myParam = Py_BuildValue("(O)", objFunGradient);
                 PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
                 if (objAddress == NULL) {
-                    bsp_typeError("invalid funGradient for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    bsp_typeError("invalid funGradient for bsp.minimize()");
                     Py_RETURN_NONE;
                 }
                 unsigned long long uAddress = 0;
                 ok = PyArg_Parse(objAddress, "K", &uAddress);
                 if (!ok) {
-                    bsp_typeError("invalid funValue for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    bsp_typeError("invalid funValue for bsp.minimize()");
                     Py_RETURN_NONE;
                 }
                 funGradient = *(FunGradient *) uAddress;
             } catch (const std::exception & e) {
                 bsp_runtimeError(e.what());
             }
+        }
+
+        double *coParams = NULL;
+        if (objCoParams) {
+            if (!PyArray_Check(objCoParams)) {
+                bsp_typeError("invalid coParams for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coParamArray = (PyArrayObject *)objCoParams;
+            npy_intp *stridesCoParams = PyArray_STRIDES(coParamArray);
+            int nDimsCoParams = PyArray_NDIM(coParamArray);
+            int elemSizeCoParams = 0;
+            if (stridesCoParams[nDimsCoParams - 1] > stridesCoParams[0]) {
+                elemSizeCoParams = stridesCoParams[0];
+            } else {
+                elemSizeCoParams = stridesCoParams[nDimsCoParams - 1];
+            }
+            if (!PyArray_ISFLOAT(coParamArray) || elemSizeCoParams != 8) {
+                bsp_typeError("invalid type of coParams for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoParams = PyArray_DIMS(coParamArray);
+            unsigned long nCoParams = 1;
+            for (int iDim = 0; iDim < nDimsCoParams; ++ iDim) {
+                nCoParams *= dimSizeCoParams[iDim];
+            }
+            if (nCoParams != nParams) {
+                bsp_typeError("invalid size of coParams for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+
+            coParams = (double *)PyArray_BYTES(coParamArray);
+        }
+
+        double *coMultipliers = NULL;
+        if (objCoMultipliers) {
+            if (!PyArray_Check(objCoMultipliers)) {
+                bsp_typeError("invalid coMultipliers for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coMultiplierArray = (PyArrayObject *)objCoMultipliers;
+            npy_intp *stridesCoMultipliers = PyArray_STRIDES(coMultiplierArray);
+            int nDimsCoMultipliers = PyArray_NDIM(coMultiplierArray);
+            int elemSizeCoMultipliers = 0;
+            if (stridesCoMultipliers[nDimsCoMultipliers - 1] > stridesCoMultipliers[0]) {
+                elemSizeCoMultipliers = stridesCoMultipliers[0];
+            } else {
+                elemSizeCoMultipliers = stridesCoMultipliers[nDimsCoMultipliers - 1];
+            }
+            if (!PyArray_ISFLOAT(coMultiplierArray) || elemSizeCoMultipliers != 8) {
+                bsp_typeError("invalid type of coMultipliers for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoMultipliers = PyArray_DIMS(coMultiplierArray);
+            unsigned long nCoMultipliers = 1;
+            for (int iDim = 0; iDim < nDimsCoMultipliers; ++ iDim) {
+                nCoMultipliers *= dimSizeCoMultipliers[iDim];
+            }
+            if (nCoMultipliers != nParams) {
+                bsp_typeError("invalid size of coMultipliers for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+
+            coMultipliers = (double *)PyArray_BYTES(coMultiplierArray);
         }
 
         GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
@@ -1630,6 +1696,12 @@ extern "C" {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, false);
             }
+            if (coParams) {
+                lbfgs.setCoLevel(dCoLevel, false);
+                lbfgs.setCoParams(coParams);
+                lbfgs.setCoMultipliers(coMultipliers);
+                lbfgs.setCoRange(concensusRange);
+            }
             lbfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1640,6 +1712,12 @@ extern "C" {
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, false);
+            }
+            if (coParams) {
+                lbfgs.setCoLevel(dCoLevel, false);
+                lbfgs.setCoParams(coParams);
+                lbfgs.setCoMultipliers(coMultipliers);
+                lbfgs.setCoRange(concensusRange);
             }
             lbfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
@@ -1652,6 +1730,12 @@ extern "C" {
                 bfgs.setPenalty(penalty);
                 bfgs.setPenaltyLevel(dPenaltyLevel, false);
             }
+            if (coParams) {
+                bfgs.setCoLevel(dCoLevel, false);
+                bfgs.setCoParams(coParams);
+                bfgs.setCoMultipliers(coMultipliers);
+                bfgs.setCoRange(concensusRange);
+            }
             bfgs.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = bfgs.param(i);
@@ -1663,13 +1747,19 @@ extern "C" {
                 cg.setPenalty(penalty);
                 cg.setPenaltyLevel(dPenaltyLevel, false);
             }
+            if (coParams) {
+                cg.setCoLevel(dCoLevel, false);
+                cg.setCoParams(coParams);
+                cg.setCoMultipliers(coMultipliers);
+                cg.setCoRange(concensusRange);
+            }
             cg.minimize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = cg.param(i);
             }
             result = cg.value();
         } else {
-            bsp_runtimeError("unknown optMethod for bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_runtimeError("unknown optMethod for bsp.minimize()");
             Py_RETURN_NONE;
         } 
         return PyRetVal(Py_BuildValue("d", result));
@@ -1677,22 +1767,22 @@ extern "C" {
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method",
-                "penaltyLevel", NULL};
-        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL;
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus",  NULL};
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL;;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
-        double dPenaltyLevel = 1.0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd: bsp.maximize", (char **)kwlist,
+        double dPenaltyLevel = 1.0, dCoLevel = 1.0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO): bsp.maximize", (char **)kwlist,
                 &objParam, &objFunValue, &objFunGradient,
-                &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel);
+                &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel, 
+                &dCoLevel, &objCoParams, &objCoMultipliers);
         if (!ok) {
-            bsp_typeError("invalid arguments for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid arguments for bsp.maximize()");
             Py_RETURN_NONE;
         }
-        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient);
+        PyRef refParam(objParam), refFunValue(objFunValue), refFunGradient(objFunGradient), refCoParams(objCoParams), refCoMultipliers(objCoMultipliers);
         if (!PyArray_Check(objParam)) {
-            bsp_typeError("invalid params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid params for bsp.maximize()");
             Py_RETURN_NONE;
         }
 
@@ -1706,7 +1796,7 @@ extern "C" {
             elemSize = strides[nDims - 1];
         }
         if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
-            bsp_typeError("invalid type of params for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_typeError("invalid type of params for bsp.maximize()");
             Py_RETURN_NONE;
         }
         npy_intp *dimSize = PyArray_DIMS(numpyArray);
@@ -1727,13 +1817,13 @@ extern "C" {
             PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
             Py_XDECREF(myParam);
             if (objAddress == NULL) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                bsp_typeError("invalid funValue for bsp.maximize()");
                 Py_RETURN_NONE;
             }
             unsigned long long uAddress = 0;
             ok = PyArg_Parse(objAddress, "K", &uAddress);
             if (!ok) {
-                bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                bsp_typeError("invalid funValue for bsp.maximize()");
                 Py_RETURN_NONE;
             }
             funValue = *(FunValue *) uAddress;
@@ -1747,19 +1837,83 @@ extern "C" {
                 PyObject *objAddress = PyObject_CallObject(ctypes_addressof_, myParam);
                 Py_XDECREF(myParam);
                 if (objAddress == NULL) {
-                    bsp_typeError("invalid funGradient for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    bsp_typeError("invalid funGradient for bsp.maximize()");
                     Py_RETURN_NONE;
                 }
                 unsigned long long uAddress = 0;
                 ok = PyArg_Parse(objAddress, "K", &uAddress);
                 if (!ok) {
-                    bsp_typeError("invalid funValue for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+                    bsp_typeError("invalid funValue for bsp.maximize()");
                     Py_RETURN_NONE;
                 }
                 funGradient = *(FunGradient *) uAddress;
             } catch (const std::exception & e) {
                 bsp_runtimeError(e.what());
             }
+        }
+
+        double *coParams = NULL;
+        if (objCoParams) {
+            if (!PyArray_Check(objCoParams)) {
+                bsp_typeError("invalid coParams for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coParamArray = (PyArrayObject *)objCoParams;
+            npy_intp *stridesCoParams = PyArray_STRIDES(coParamArray);
+            int nDimsCoParams = PyArray_NDIM(coParamArray);
+            int elemSizeCoParams = 0;
+            if (stridesCoParams[nDimsCoParams - 1] > stridesCoParams[0]) {
+                elemSizeCoParams = stridesCoParams[0];
+            } else {
+                elemSizeCoParams = stridesCoParams[nDimsCoParams - 1];
+            }
+            if (!PyArray_ISFLOAT(coParamArray) || elemSizeCoParams != 8) {
+                bsp_typeError("invalid type of coParams for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoParams = PyArray_DIMS(coParamArray);
+            unsigned long nCoParams = 1;
+            for (int iDim = 0; iDim < nDimsCoParams; ++ iDim) {
+                nCoParams *= dimSizeCoParams[iDim];
+            }
+            if (nCoParams != nParams) {
+                bsp_typeError("invalid size of coParams for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+
+            coParams = (double *)PyArray_BYTES(coParamArray);
+        }
+
+        double *coMultipliers = NULL;
+        if (objCoMultipliers) {
+            if (!PyArray_Check(objCoMultipliers)) {
+                bsp_typeError("invalid coMultipliers for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coMultiplierArray = (PyArrayObject *)objCoMultipliers;
+            npy_intp *stridesCoMultipliers = PyArray_STRIDES(coMultiplierArray);
+            int nDimsCoMultipliers = PyArray_NDIM(coMultiplierArray);
+            int elemSizeCoMultipliers = 0;
+            if (stridesCoMultipliers[nDimsCoMultipliers - 1] > stridesCoMultipliers[0]) {
+                elemSizeCoMultipliers = stridesCoMultipliers[0];
+            } else {
+                elemSizeCoMultipliers = stridesCoMultipliers[nDimsCoMultipliers - 1];
+            }
+            if (!PyArray_ISFLOAT(coMultiplierArray) || elemSizeCoMultipliers != 8) {
+                bsp_typeError("invalid type of coMultipliers for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoMultipliers = PyArray_DIMS(coMultiplierArray);
+            unsigned long nCoMultipliers = 1;
+            for (int iDim = 0; iDim < nDimsCoMultipliers; ++ iDim) {
+                nCoMultipliers *= dimSizeCoMultipliers[iDim];
+            }
+            if (nCoMultipliers != nParams) {
+                bsp_typeError("invalid size of coMultipliers for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+
+            coMultipliers = (double *)PyArray_BYTES(coMultiplierArray);
         }
 
         GradientBasedOptimization::Penalty penalty = GradientBasedOptimization::PENALTY_NONE;
@@ -1784,6 +1938,11 @@ extern "C" {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, true);
             }
+            if (coParams) {
+                lbfgs.setCoLevel(dCoLevel, true);
+                lbfgs.setCoParams(coParams);
+                lbfgs.setCoMultipliers(coMultipliers);
+            }
             lbfgs.maximize();
 
             for (unsigned long i = 0; i < nParams; ++ i) {
@@ -1796,6 +1955,11 @@ extern "C" {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, true);
             }
+            if (coParams) {
+                lbfgs.setCoLevel(dCoLevel, true);
+                lbfgs.setCoParams(coParams);
+                lbfgs.setCoMultipliers(coMultipliers);
+            }
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = lbfgs.param(i);
@@ -1806,6 +1970,11 @@ extern "C" {
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 bfgs.setPenalty(penalty);
                 bfgs.setPenaltyLevel(dPenaltyLevel, true);
+            }
+            if (coParams) {
+                bfgs.setCoLevel(dCoLevel, true);
+                bfgs.setCoParams(coParams);
+                bfgs.setCoMultipliers(coMultipliers);
             }
             bfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
@@ -1818,16 +1987,133 @@ extern "C" {
                 cg.setPenalty(penalty);
                 cg.setPenaltyLevel(dPenaltyLevel, true);
             }
+            if (coParams) {
+                cg.setCoLevel(dCoLevel, true);
+                cg.setCoParams(coParams);
+                cg.setCoMultipliers(coMultipliers);
+            }
             cg.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
                 params[i] = cg.param(i);
             }
             result = cg.value();
         } else {
-            bsp_runtimeError("unknown optMethod for bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)");
+            bsp_runtimeError("unknown optMethod for bsp.maximize()");
             Py_RETURN_NONE;
         } 
         return PyRetVal(Py_BuildValue("d", result));
+    }
+
+    static PyObject *bsp_concensus(PyObject *self, PyObject *args, PyObject *kwargs) {
+        static const char * kwlist[] = {"nParamsPerWorker", "nWorkers", "params", "multipliers", "center", "centerLevel", "proximityLevel", NULL};
+        PyObject *objCoParams = NULL, *objCoMultipliers = NULL, *objParam = NULL;
+        unsigned long nParamsPerWorker = 0, nWorkers = 0;
+        double dCenterLevel = 1.0, dProximityLevel = 1.0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "kkOOO|dd: bsp.maximize", (char **)kwlist,
+                &nParamsPerWorker, &nWorkers, &objCoParams, &objCoMultipliers, &objParam, &dCenterLevel, &dProximityLevel);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.concensus()");
+            Py_RETURN_NONE;
+        }
+        PyRef refCoParams(objCoParams), refCoMultipliers(objCoMultipliers), refParam(objParam);
+
+        double *coParams = NULL;
+        if (objCoParams) {
+            if (!PyArray_Check(objCoParams)) {
+                bsp_typeError("invalid coParams for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coParamArray = (PyArrayObject *)objCoParams;
+            npy_intp *stridesCoParams = PyArray_STRIDES(coParamArray);
+            int nDimsCoParams = PyArray_NDIM(coParamArray);
+            int elemSizeCoParams = 0;
+            if (stridesCoParams[nDimsCoParams - 1] > stridesCoParams[0]) {
+                elemSizeCoParams = stridesCoParams[0];
+            } else {
+                elemSizeCoParams = stridesCoParams[nDimsCoParams - 1];
+            }
+            if (!PyArray_ISFLOAT(coParamArray) || elemSizeCoParams != 8) {
+                bsp_typeError("invalid type of coParams for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoParams = PyArray_DIMS(coParamArray);
+            unsigned long nCoParams = 1;
+            for (int iDim = 0; iDim < nDimsCoParams; ++ iDim) {
+                nCoParams *= dimSizeCoParams[iDim];
+            }
+            if (nCoParams != nParamsPerWorker * nWorkers) {
+                bsp_typeError("invalid size of coParams for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+
+            coParams = (double *)PyArray_BYTES(coParamArray);
+        }
+
+        double *coMultipliers = NULL;
+        if (objCoMultipliers) {
+            if (!PyArray_Check(objCoMultipliers)) {
+                bsp_typeError("invalid coMultipliers for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *coMultiplierArray = (PyArrayObject *)objCoMultipliers;
+            npy_intp *stridesCoMultipliers = PyArray_STRIDES(coMultiplierArray);
+            int nDimsCoMultipliers = PyArray_NDIM(coMultiplierArray);
+            int elemSizeCoMultipliers = 0;
+            if (stridesCoMultipliers[nDimsCoMultipliers - 1] > stridesCoMultipliers[0]) {
+                elemSizeCoMultipliers = stridesCoMultipliers[0];
+            } else {
+                elemSizeCoMultipliers = stridesCoMultipliers[nDimsCoMultipliers - 1];
+            }
+            if (!PyArray_ISFLOAT(coMultiplierArray) || elemSizeCoMultipliers != 8) {
+                bsp_typeError("invalid type of coMultipliers for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSizeCoMultipliers = PyArray_DIMS(coMultiplierArray);
+            unsigned long nCoMultipliers = 1;
+            for (int iDim = 0; iDim < nDimsCoMultipliers; ++ iDim) {
+                nCoMultipliers *= dimSizeCoMultipliers[iDim];
+            }
+            if (nCoMultipliers != nParamsPerWorker * nWorkers) {
+                bsp_typeError("invalid size of coMultipliers for bsp.concensus()");
+                Py_RETURN_NONE;
+            }
+
+            coMultipliers = (double *)PyArray_BYTES(coMultiplierArray);
+        }
+
+        double *params = NULL;
+        if (objParam) {
+            if (!PyArray_Check(objParam)) {
+                bsp_typeError("invalid params for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            PyArrayObject *numpyArray = (PyArrayObject *)objParam;
+            npy_intp *strides = PyArray_STRIDES(numpyArray);
+            int nDims = PyArray_NDIM(numpyArray);
+            int elemSize = 0;
+            if (strides[nDims - 1] > strides[0]) {
+                elemSize = strides[0];
+            } else {
+                elemSize = strides[nDims - 1];
+            }
+            if (!PyArray_ISFLOAT(numpyArray) || elemSize != 8) {
+                bsp_typeError("invalid type of params for bsp.minimize()");
+                Py_RETURN_NONE;
+            }
+            npy_intp *dimSize = PyArray_DIMS(numpyArray);
+            unsigned long nParams = 1;
+            for (int iDim = 0; iDim < nDims; ++ iDim) {
+                nParams *= dimSize[iDim];
+            }
+            if (nParams != nParamsPerWorker) {
+                bsp_typeError("invalid size of center for bsp.maximize()");
+                Py_RETURN_NONE;
+            }
+
+            params = (double *)PyArray_BYTES(numpyArray);
+        }
+        concensus(dProximityLevel, dCenterLevel, nWorkers, nParamsPerWorker, coParams, coMultipliers, params);
+        Py_RETURN_NONE;
     }
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
@@ -2049,7 +2335,7 @@ extern "C" {
             Py_RETURN_NONE;
         }
         unsigned short *x = (unsigned short *)PyArray_BYTES(numpyArray);
-        Apriori apriori(elemSize);
+        Apriori apriori(0);
         apriori.loadFromFile(strFileName);
         int retval = 0;
         if (useTmpl2) {
@@ -2060,6 +2346,34 @@ extern "C" {
         return PyRetVal(Py_BuildValue("i", retval));
     }
 
+    static PyObject *bsp_mostFrequent(PyObject *self, PyObject *args) {
+        char *fileName = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.mostFrequent", &fileName);
+        if (!ok) {
+            bsp_typeError("invalid file name for bsp.mostFrequent");
+            Py_RETURN_NONE;
+        }
+        Apriori apriori(0);
+        apriori.loadFromFile(fileName);
+        unsigned long freq = 0;
+        unsigned short word = 0;
+        freq = apriori.mostFrequent(&word);
+        //printf("largest be = %lf\n", apriori.largestBE());
+        return PyRetVal(Py_BuildValue("(k,k)", freq, word));
+    }
+
+    static PyObject *bsp_wordFreq(PyObject *self, PyObject *args) {
+        char *fileName = NULL;
+        int wi = 0;
+        int ok = PyArg_ParseTuple(args, "si:bsp.wordFreq", &fileName, &wi);
+        if (!ok) {
+            bsp_typeError("invalid file name for bsp.wordFreq");
+            Py_RETURN_NONE;
+        }
+        Apriori apriori(0);
+        apriori.loadFromFile(fileName);
+        return PyRetVal(Py_BuildValue("k", apriori.freq((unsigned short)wi)));
+    }
 
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
@@ -2099,9 +2413,12 @@ extern "C" {
         {"toc", bsp_toc, METH_VARARGS, "stop timing"},
         {"minimize", (PyCFunction)bsp_minimize, METH_VARARGS | METH_KEYWORDS, "find the minimum of a given function"},
         {"maximize", (PyCFunction)bsp_maximize, METH_VARARGS | METH_KEYWORDS, "find the maximum of a given function"},
+        {"concensus", (PyCFunction)bsp_concensus, METH_VARARGS, "update center and multipliers for concensus"},
         {"findFreqSet", (PyCFunction)bsp_findFreqSet, METH_VARARGS | METH_KEYWORDS, "find the frequent sets of a sequence"},
         {"getFreq", (PyCFunction)bsp_getFreq, METH_VARARGS | METH_KEYWORDS, "get the frequency of the words in a sequence"},
         {"getFreqIndex", (PyCFunction)bsp_getFreqIndex, METH_VARARGS | METH_KEYWORDS, "get the indices of frequent sets of the words in a sequence"},
+        {"mostFrequent", (PyCFunction)bsp_mostFrequent, METH_VARARGS, "get the most frequent word and its frequency"},
+        {"wordFreq", (PyCFunction)bsp_wordFreq, METH_VARARGS, "get the frequency of a word"},
         //{"repeat", bsp_repeat, METH_VARARGS, "repeat an operation"},
         {NULL,NULL,0,NULL}
     };

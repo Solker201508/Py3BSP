@@ -70,6 +70,10 @@ void BFGS::optimize() {
         LineSearch lineSearch(_nParams, _funValue, _maxIter, _params, _direction);
         lineSearch.setPenalty(_penalty);
         lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
+        lineSearch.setCoLevel(_coLevel, _toMaximize);
+        lineSearch.setCoParams(_coParams);
+        lineSearch.setCoMultipliers(_coMultipliers);
+        lineSearch.setCoRange(_coStart, _coEnd);
         if (_toMaximize)
             lineSearch.maximize();
         else

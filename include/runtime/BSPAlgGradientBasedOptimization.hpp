@@ -14,11 +14,11 @@ namespace BSP {
                 double *_newG;
                 double *_coParams;
                 double *_coMultipliers;
-                double *_proximity;
                 double _penaltyLevel;
                 double _coLevel;
-                double _proximityLevel;
                 Penalty _penalty;
+                unsigned long _coStart;
+                unsigned long _coEnd;
             public:
                 GradientBasedOptimization(unsigned long nParams, FunValue funValue, unsigned long maxIter, double tol, Gradient gradient);
                 virtual ~GradientBasedOptimization();
@@ -31,8 +31,8 @@ namespace BSP {
                 void setCoLevel(double level, bool toMaximize);
                 void setCoParams(double *coParams);
                 void setCoMultipliers(double *multipliers);
-                void setProximity(double *proximity);
-                void setProximityLevel(double proximityLevel, bool toMaximize);
+                void setCoRange(long i);
+                void setCoRange(unsigned long start, unsigned long end);
             private:
                 double penaltyLogSum(double *params);
                 double penaltyL1(double *params);
@@ -45,8 +45,6 @@ namespace BSP {
                 double concensus(double *params);
                 void applyConcensus(double *params, double *result);
 
-                double proximity(double *params);
-                void applyProximity(double *params, double *result);
                 void richardson(double *params, double *g);
         };
     }

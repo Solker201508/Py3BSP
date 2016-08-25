@@ -1519,3 +1519,63 @@ void Apriori::loadFromFile(char *fileName) {
     fclose(f);
 }
 
+unsigned long Apriori::mostFrequent(unsigned short *word) {
+    unsigned long bestFreq = 0;
+    unsigned short bestW = 0;
+    for (std::map<unsigned short, unsigned long>::iterator iter = _w1.begin(); iter != _w1.end(); ++ iter) {
+        if (iter->first < 4)
+            continue;
+        if (iter->second > bestFreq) {
+            bestW = iter->first;
+            bestFreq = iter->second;
+        }
+    }
+    *word = bestW;
+    return bestFreq;
+}
+
+double Apriori::largestBE() {
+    double result = 0.0;
+    for (std::map<unsigned short, double>::iterator iter = _bel1.begin(); iter != _bel1.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned short, double>::iterator iter = _ber1.begin(); iter != _ber1.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long, double>::iterator iter = _bel2.begin(); iter != _bel2.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long, double>::iterator iter = _ber2.begin(); iter != _ber2.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long long, double>::iterator iter = _bel3.begin(); iter != _bel3.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long long, double>::iterator iter = _ber3.begin(); iter != _ber3.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long long, double>::iterator iter = _bel4.begin(); iter != _bel4.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    for (std::map<unsigned long long, double>::iterator iter = _ber4.begin(); iter != _ber4.end(); ++ iter) {
+        if (iter->second > result)
+            result = iter->second;
+    }
+    return result;
+}
+
+unsigned long Apriori::freq(unsigned short word) {
+    std::map<unsigned short, unsigned long>::iterator iter = _w1.find(word);
+    if (iter != _w1.end())
+        return iter->second;
+    else
+        return 0;
+}
+
