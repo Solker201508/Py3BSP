@@ -2,7 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 
-void concensus(double proximityLevel, double centerLevel,
+double concensus(double proximityLevel, double centerLevel,
         unsigned long nWorkers, unsigned long nParamsPerWorker,
         double *params, double *multipliers, double *center) {
     proximityLevel = fabs(proximityLevel);
@@ -17,6 +17,7 @@ void concensus(double proximityLevel, double centerLevel,
     }
     double dominator = nWorkers * centerLevel + proximityLevel;
     double scale = 1.0 / dominator;
+    double retval = 0.0;
     for (unsigned int i = 0; i < nParamsPerWorker; ++ i) {
         center[i] *= proximityLevel;
         unsigned int k = i;
@@ -28,6 +29,8 @@ void concensus(double proximityLevel, double centerLevel,
 
         k = i;
         for (unsigned int j = 0; j < nWorkers; ++ j) {
+            double d = params[k] - center[i];
+            retval += d * d;
             multipliers[k] += centerLevel * (params[k] - center[i]);
             k += nParamsPerWorker;
         }
@@ -39,6 +42,8 @@ void concensus(double proximityLevel, double centerLevel,
             multipliers[k] = -multipliers[k];
         }
     }
+
+    return sqrt(retval / nWorkers);
 }
 
 using namespace BSP::Algorithm;

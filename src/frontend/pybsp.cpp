@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
     initBSP(&argc, &argv);
     int err = PyRun_SimpleFileEx(pyScript,argv[1],1);
     if (err) {
-        fprintf(stderr, "ERROR: failed to run file '%s' as a python script\n",
+        fprintf(stderr, "ERROR: failed to run python script '%s'\n",
                 argv[1]);
         return -3;
     }

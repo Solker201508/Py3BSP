@@ -1,7 +1,7 @@
 #ifndef __BSP_ALG_OPTIMIZATION_HPP__
 #define __BSP_ALG_OPTIMIZATION_HPP__
 #include <cstdlib>
-void concensus(double proximityLevel, double centerLevel,
+double concensus(double proximityLevel, double centerLevel,
         unsigned long nWorkers, unsigned long nParamsPerWorker,
         double *params, double *multipliers, double *center);
 namespace BSP {

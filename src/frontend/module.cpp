@@ -108,11 +108,11 @@ extern "C" {
         ctypes_addressof_ = NULL;
         fromProc_ = NULL;
         nProcs_ = 0;
+        delete runtime_;
         try {
             Py_Finalize();
         } catch (...) {
         }
-        delete runtime_;
     }
 
     // myProcID = bsp.myProcID()
@@ -2009,7 +2009,7 @@ extern "C" {
         PyObject *objCoParams = NULL, *objCoMultipliers = NULL, *objParam = NULL;
         unsigned long nParamsPerWorker = 0, nWorkers = 0;
         double dCenterLevel = 1.0, dProximityLevel = 1.0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "kkOOO|dd: bsp.maximize", (char **)kwlist,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "kkOOO|dd: bsp.concensus", (char **)kwlist,
                 &nParamsPerWorker, &nWorkers, &objCoParams, &objCoMultipliers, &objParam, &dCenterLevel, &dProximityLevel);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.concensus()");
@@ -2112,8 +2112,10 @@ extern "C" {
 
             params = (double *)PyArray_BYTES(numpyArray);
         }
-        concensus(dProximityLevel, dCenterLevel, nWorkers, nParamsPerWorker, coParams, coMultipliers, params);
-        Py_RETURN_NONE;
+
+        double retval = 
+            concensus(dProximityLevel, dCenterLevel, nWorkers, nParamsPerWorker, coParams, coMultipliers, params);
+        return PyRetVal(Py_BuildValue("d", retval));
     }
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
@@ -2413,7 +2415,7 @@ extern "C" {
         {"toc", bsp_toc, METH_VARARGS, "stop timing"},
         {"minimize", (PyCFunction)bsp_minimize, METH_VARARGS | METH_KEYWORDS, "find the minimum of a given function"},
         {"maximize", (PyCFunction)bsp_maximize, METH_VARARGS | METH_KEYWORDS, "find the maximum of a given function"},
-        {"concensus", (PyCFunction)bsp_concensus, METH_VARARGS, "update center and multipliers for concensus"},
+        {"concensus", (PyCFunction)bsp_concensus, METH_VARARGS | METH_KEYWORDS, "update center and multipliers for concensus"},
         {"findFreqSet", (PyCFunction)bsp_findFreqSet, METH_VARARGS | METH_KEYWORDS, "find the frequent sets of a sequence"},
         {"getFreq", (PyCFunction)bsp_getFreq, METH_VARARGS | METH_KEYWORDS, "get the frequency of the words in a sequence"},
         {"getFreqIndex", (PyCFunction)bsp_getFreqIndex, METH_VARARGS | METH_KEYWORDS, "get the indices of frequent sets of the words in a sequence"},
