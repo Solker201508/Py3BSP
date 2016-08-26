@@ -75,7 +75,7 @@ void LBFGS::optimize() {
             findDirection(_iter - restarted);
         else
             findDirection(_mLim);
-        LineSearch lineSearch(_nParams, _funValue, _maxIter, _params, _direction);
+        LineSearch lineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
         lineSearch.setPenalty(_penalty);
         lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
         lineSearch.setCoLevel(_coLevel, _toMaximize);
@@ -105,7 +105,7 @@ void LBFGS::optimize() {
             memcpy(_direction, _g, sizeof(double) * _nParams);
 
             findDirection(0);
-            LineSearch restartedLineSearch(_nParams, _funValue, _maxIter, _params, _direction);
+            LineSearch restartedLineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
             restartedLineSearch.setPenalty(_penalty);
             restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
             restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);

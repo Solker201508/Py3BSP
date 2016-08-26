@@ -50,7 +50,7 @@ void CG::optimize() {
         }
     }
     for (_iter = 0; _iter < _maxIter; ++_iter) {
-        LineSearch lineSearch(_nParams, _funValue, _maxIter, _params, _direction);
+        LineSearch lineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
         lineSearch.setPenalty(_penalty);
         lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
         lineSearch.setCoLevel(_coLevel, _toMaximize);
