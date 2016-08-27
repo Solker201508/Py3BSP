@@ -6,10 +6,9 @@
 
 using namespace BSP::Algorithm;
 
-BFGS::BFGS(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient, double tol, double *params0):
-    GradientBasedOptimization(nParams, funValue, maxIter, tol, gradient)
+BFGS::BFGS(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient, double *params0):
+    LineSearch(nParams, funValue, maxIter, gradient)
 {
-    _direction = new double[_nParams];
     _h = new double[_nParams * _nParams];
     _v = new double[_nParams * _nParams];
     _temp = new double[_nParams * _nParams];
@@ -28,7 +27,6 @@ BFGS::BFGS(unsigned long nParams, FunValue funValue, unsigned long maxIter, Grad
 }
 
 BFGS::~BFGS() {
-    delete[] _direction;
     delete[] _h;
     delete[] _v;
     delete[] _temp;
@@ -67,21 +65,7 @@ void BFGS::optimize() {
         }
     }
     for (_iter = 0; _iter < _maxIter; ++_iter) {
-        LineSearch lineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
-        lineSearch.setPenalty(_penalty);
-        lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
-        lineSearch.setCoLevel(_coLevel, _toMaximize);
-        lineSearch.setCoParams(_coParams);
-        lineSearch.setCoMultipliers(_coMultipliers);
-        lineSearch.setCoRange(_coStart, _coEnd);
-        if (_toMaximize)
-            lineSearch.maximize();
-        else
-            lineSearch.minimize();
-        for (unsigned long i = 0; i < _nParams; ++i) {
-            _newParams[i] = lineSearch.param(i);
-        }
-        newF();
+        LineSearch::optimize();
         newG();
         findDirection();
         if (_rho == 0.0)

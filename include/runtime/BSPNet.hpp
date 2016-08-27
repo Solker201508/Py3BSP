@@ -154,6 +154,8 @@ namespace BSP {
          A size type, indicates the upper bound of _numberOfDataBlocksToSend and _numberOfDataBlocksToReceive.
          */
         uint64_t _maxNumberOfDataBlocks;
+
+        double *_bufSumDouble;
     };
 
 } // namespace BSP

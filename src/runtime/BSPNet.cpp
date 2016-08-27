@@ -37,6 +37,7 @@ void Net::initialize(MPI_Comm comm, uint64_t segmentThreshold,
     _dataBlockToReceive = new void*[maxNumberOfDataBlocks];
     _lengthOfDataBlockToReceive = new uint64_t[maxNumberOfDataBlocks];
     _numberOfDataBlocksToReceive = 0;
+    _bufSumDouble = new double[1 << 20];
 }
 
 Net::~Net() {
@@ -44,6 +45,7 @@ Net::~Net() {
     delete[] _lengthOfDataBlockToSend;
     delete[] _dataBlockToReceive;
     delete[] _lengthOfDataBlockToReceive;
+    delete[] _bufSumDouble;
 }
 
 bool Net::addDataBlockToSend(void *dataBlock, uint64_t lengthOfDataBlock) {
@@ -247,13 +249,33 @@ void Net::jointGather(void* dataOut, void* dataIn, uint64_t lengthPerProc,
 
 //! all_sum_double
 void Net::allSumDouble(double *data, uint64_t n) {
-    double *result = new double[n];
-    for (uint64_t i = 0; i < n; ++ i)
-        result[i] = 0.0;
-    MPI_Allreduce(data, result, (int)n, MPI_DOUBLE, MPI_SUM, _communicator);
-    for (uint64_t i = 0; i < n; ++ i)
-        data[i] = result[i];
-    delete[] result;
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_SUM, _communicator);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_SUM, _communicator);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        double *myData = data + (myM << 20);
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = myData[i];
+            myData[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_SUM, _communicator);
+    }
 }
 
 uint64_t Net::probe() {

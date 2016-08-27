@@ -11,8 +11,8 @@ using namespace BSP;
 using namespace BSP::Algorithm;
 
 LBFGS::LBFGS(unsigned long nParams, FunValue funValue, unsigned long maxIter, 
-                        Gradient gradient, unsigned long mLim, double tol, double *params0):
-    GradientBasedOptimization(nParams, funValue, maxIter, tol, gradient), _mLim(mLim)
+                        Gradient gradient, unsigned long mLim, double *params0):
+    LineSearch(nParams, funValue, maxIter, gradient), _mLim(mLim)
 {
     if (params0) {
         for (unsigned long i = 0; i < _nParams; ++i) {
@@ -37,7 +37,6 @@ LBFGS::LBFGS(unsigned long nParams, FunValue funValue, unsigned long maxIter,
             throw std::runtime_error("not enough memory");
     }
 
-    _toMaximize = false;
     _iter = 0;
 } 
 
@@ -49,7 +48,6 @@ LBFGS::~LBFGS() {
     delete[] _y;
     delete[] _s;
     delete[] _rho;
-    delete[] _direction;
 }
 
 void LBFGS::maximize() {
@@ -78,28 +76,14 @@ void LBFGS::optimize() {
             findDirection(_iter - restarted);
         else
             findDirection(_mLim);
-        LineSearch lineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
-        lineSearch.setPenalty(_penalty);
-        lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
-        lineSearch.setCoLevel(_coLevel, _toMaximize);
-        lineSearch.setCoParams(_coParams);
-        lineSearch.setCoMultipliers(_coMultipliers);
-        lineSearch.setCoRange(_coStart, _coEnd);
-        if (_toMaximize)
-            lineSearch.maximize();
-        else
-            lineSearch.minimize();
-        for (unsigned long i = 0; i < _nParams; ++i) {
-            _newParams[i] = lineSearch.param(i);
-        }
-        newF();
+        LineSearch::optimize();
         newG();
         _newG2 = 0.0;
         for (unsigned long i = 0; i < _nParams; ++i) {
             _newG2 += _newG[i] * _newG[i];
         }
         updateDf();
-        //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
+
         if (myProcID == 0)
             std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
         if (_newF != _newF)
@@ -109,21 +93,7 @@ void LBFGS::optimize() {
             memcpy(_direction, _g, sizeof(double) * _nParams);
 
             findDirection(0);
-            LineSearch restartedLineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
-            restartedLineSearch.setPenalty(_penalty);
-            restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
-            restartedLineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
-            restartedLineSearch.setCoLevel(_coLevel, _toMaximize);
-            restartedLineSearch.setCoParams(_coParams);
-            restartedLineSearch.setCoRange(_coStart, _coEnd);
-            if (_toMaximize)
-                restartedLineSearch.maximize();
-            else
-                restartedLineSearch.minimize();
-            for (unsigned long i = 0; i < _nParams; ++i) {
-                _newParams[i] = restartedLineSearch.param(i);
-            }
-            newF();
+            LineSearch::optimize();
             newG();
             _newG2 = 0.0;
             for (unsigned long i = 0; i < _nParams; ++i) {

@@ -1698,7 +1698,7 @@ extern "C" {
         }
         double result = 0.0;
         if (strMethod == NULL) {
-            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, false);
@@ -1715,7 +1715,7 @@ extern "C" {
             }
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "LBFGS")) {
-            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, false);
@@ -1732,7 +1732,7 @@ extern "C" {
             }
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "BFGS")) {
-            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 bfgs.setPenalty(penalty);
                 bfgs.setPenaltyLevel(dPenaltyLevel, false);
@@ -1749,7 +1749,7 @@ extern "C" {
             }
             result = bfgs.value();
         } else if (0 == strcmp(strMethod, "CG")) {
-            CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            CG cg(nParams, funValue, kMaxIter, funGradient, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 cg.setPenalty(penalty);
                 cg.setPenaltyLevel(dPenaltyLevel, false);
@@ -1948,7 +1948,7 @@ extern "C" {
         }
         double result = 0.0;
         if (strMethod == NULL) {
-            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, true);
@@ -1966,7 +1966,7 @@ extern "C" {
             }
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "LBFGS")) {
-            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
+            LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 lbfgs.setPenalty(penalty);
                 lbfgs.setPenaltyLevel(dPenaltyLevel, true);
@@ -1983,7 +1983,7 @@ extern "C" {
             }
             result = lbfgs.value();
         } else if (0 == strcmp(strMethod, "BFGS")) {
-            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            BFGS bfgs(nParams, funValue, kMaxIter, funGradient, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 bfgs.setPenalty(penalty);
                 bfgs.setPenaltyLevel(dPenaltyLevel, true);
@@ -2000,7 +2000,7 @@ extern "C" {
             }
             result = bfgs.value();
         } else if (0 == strcmp(strMethod, "CG")) {
-            CG cg(nParams, funValue, kMaxIter, funGradient, 1e-5, params);
+            CG cg(nParams, funValue, kMaxIter, funGradient, params);
             if (penalty != GradientBasedOptimization::PENALTY_NONE) {
                 cg.setPenalty(penalty);
                 cg.setPenaltyLevel(dPenaltyLevel, true);

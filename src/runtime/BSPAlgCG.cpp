@@ -6,12 +6,9 @@
 
 using namespace BSP::Algorithm;
 
-CG::CG(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient, double tol, double *params0):
-    GradientBasedOptimization(nParams, funValue, maxIter, tol, gradient)
+CG::CG(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient, double *params0):
+    LineSearch(nParams, funValue, maxIter, gradient)
 {
-    _direction = new double[_nParams];
-    if (NULL == _direction)
-        throw std::runtime_error("not enough memory");
     if (params0) {
         memcpy(_params, params0, sizeof(double) * _nParams);
     } else {
@@ -23,7 +20,6 @@ CG::CG(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient
 }
 
 CG::~CG() {
-    delete[] _direction;
 }
 
 void CG::minimize() {
@@ -50,21 +46,7 @@ void CG::optimize() {
         }
     }
     for (_iter = 0; _iter < _maxIter; ++_iter) {
-        LineSearch lineSearch(_nParams, _funValue, _maxIter > 30 ? 30 : _maxIter, _params, _direction);
-        lineSearch.setPenalty(_penalty);
-        lineSearch.setPenaltyLevel(_penaltyLevel, _toMaximize);
-        lineSearch.setCoLevel(_coLevel, _toMaximize);
-        lineSearch.setCoParams(_coParams);
-        lineSearch.setCoMultipliers(_coMultipliers);
-        lineSearch.setCoRange(_coStart, _coEnd);
-        if (_toMaximize)
-            lineSearch.maximize();
-        else
-            lineSearch.minimize();
-        for (unsigned long i = 0; i < _nParams; ++i) {
-            _newParams[i] = lineSearch.param(i);
-        }
-        newF();
+        LineSearch::optimize();
         newG();
         findDirection();
         updateDf();
@@ -74,8 +56,6 @@ void CG::optimize() {
         if (_toMaximize? _newF <= _f : _newF >= _f) {
             break;
         }
-        if (_iter > 3 && reductionScale() < _tol)
-            break;
         update();
     }
 }

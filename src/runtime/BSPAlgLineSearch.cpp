@@ -7,20 +7,20 @@
 
 using namespace BSP::Algorithm;
 
-LineSearch::LineSearch(unsigned long nParams, FunValue funValue, unsigned long maxIter, double *params0, double *direction):
-    GradientBasedOptimization(nParams, funValue, maxIter, 1.0, NULL)
+LineSearch::LineSearch(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient):
+    GradientBasedOptimization(nParams, funValue, maxIter, 1.0, gradient)
 {
+    _params0 = new double[_nParams];
     _prevParams = new double[_nParams];
     _direction = new double[_nParams];
     if (NULL == _prevParams || NULL == _direction)
         throw std::runtime_error("not enough memory");
-    memcpy(_params, params0, _nParams * sizeof(double));
-    memcpy(_direction, direction, _nParams * sizeof(double));
     _iter = 0;
     _toMaximize = false;
 }
 
 LineSearch::~LineSearch() {
+    delete[] _params0;
     delete[] _prevParams;
     delete[] _direction;
 }
@@ -36,16 +36,18 @@ void LineSearch::maximize() {
 }
 
 void LineSearch::optimize() {
+    memcpy(_params0, _params, _nParams * sizeof(double));
+    f();
+    double f0 = _f;
+
     double d2 = 0.0;
     for (unsigned long i = 0; i < _nParams; ++ i) {
         if (_direction[i] != _direction[i])
             return;
         d2 += _direction[i] * _direction[i];
     }
-    f();
     if (d2 == 0.0)
         return;
-    //std::cout << "d2 = " << d2 << std::endl;
 
     memcpy(_prevParams, _params, _nParams * sizeof(double));
     _prevF = _f;
@@ -92,6 +94,7 @@ void LineSearch::optimize() {
         double vpw = _v + _w;
         double dominiator = vmwfu - umwfv + umvfw;
         double factor = (_u - _v) * (_u - _w) * (_v - _w) * dominiator;
+        //std::cout << dominiator << ", " << factor << std::endl;
         if (dominiator == 0.0 || factor == 0.0) {
             //std::cout << "dominiator == 0 " << std::endl;
             break;
@@ -155,6 +158,14 @@ void LineSearch::optimize() {
         }
         _w = newW;
         newF();
+        while (_newF != _newF) {
+            newW = _v + (newW - _v) * 0.5;
+            for (unsigned long i = 0; i < _nParams; ++i) {
+                _newParams[i] = _params[i] + (newW - _v) * _direction[i];
+            }
+            _w = newW;
+            newF();
+        }
         //std::cout << _iter << ": f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
         //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
 
@@ -171,46 +182,67 @@ void LineSearch::optimize() {
         if (_newF == _newF) {
             if (_newF <= _f) {
                 if (_f < _prevF) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
+                    // _prevF 最大
+                    memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                    _newF = _prevF;
                 } else {
+                    // _f 最大
+                    memcpy(_newParams, _params, _nParams * sizeof(double));
+                    _newF = _f;
                 }
             } else {
                 if (_newF < _prevF) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
+                    // _prevF 最大
+                    memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                    _newF = _prevF;
                 } else {
-                    memcpy(_params, _newParams, _nParams * sizeof(double));
-                    _f = _newF;
+                    // _newF 最大
                 }
             }
         } else {
             if (_prevF > _f) {
-                memcpy(_params, _prevParams, _nParams * sizeof(double));
-                _f = _prevF;
+                // _prevF 最大
+                memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                _newF = _prevF;
+            } else {
+                // _f 最大
+                memcpy(_newParams, _params, _nParams * sizeof(double));
+                _newF = _f;
             }
         }
     } else {
         if (_newF == _newF) {
             if (_newF >= _f) {
                 if (_f > _prevF) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
+                    // _prevF 最小 
+                    memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                    _newF = _prevF;
+                } else {
+                    // _f 最小 
+                    memcpy(_newParams, _params, _nParams * sizeof(double));
+                    _newF = _f;
                 }
             } else {
                 if (_newF > _prevF) {
-                    memcpy(_params, _prevParams, _nParams * sizeof(double));
-                    _f = _prevF;
+                    // _prevF 最小 
+                    memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                    _newF = _prevF;
                 } else {
-                    memcpy(_params, _newParams, _nParams * sizeof(double));
-                    _f = _newF;
+                    // _newF 最小
                 }
             }
         } else {
             if (_prevF < _f) {
-                memcpy(_params, _prevParams, _nParams * sizeof(double));
-                _f = _prevF;
+                // _prevF 最小
+                memcpy(_newParams, _prevParams, _nParams * sizeof(double));
+                _newF = _prevF;
+            } else {
+                // _f 最小
+                memcpy(_newParams, _params, _nParams * sizeof(double));
+                _newF = _f;
             }
         }
     }
+    memcpy(_params, _params0, _nParams * sizeof(double));
+    _f = f0;
 }

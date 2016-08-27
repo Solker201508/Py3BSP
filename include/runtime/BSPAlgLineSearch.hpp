@@ -5,19 +5,20 @@ namespace BSP {
     namespace Algorithm {
         class LineSearch : public GradientBasedOptimization {
             private:
-                double *_direction;
+                double *_params0;
                 double *_prevParams;
                 double _prevF;
                 unsigned long _iter;
-                bool _toMaximize;
                 double _u, _v, _w;
             public:
-                LineSearch(unsigned long nParams, FunValue funValue, unsigned long maxIter, double *params0, double *direction);
+                LineSearch(unsigned long nParams, FunValue funValue, unsigned long maxIter, Gradient gradient);
                 virtual ~LineSearch();
                 virtual void minimize();
                 virtual void maximize();
             protected:
-                void optimize();
+                double *_direction;
+                bool _toMaximize;
+                virtual void optimize();
         };
     }
 }
