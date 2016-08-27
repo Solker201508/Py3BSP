@@ -69,6 +69,9 @@ namespace BSP {
         void jointGather(void *dataOut, void *dataIn, uint64_t lengthPerProc,
                 uint64_t startProcID, uint64_t nProcsInGrid);
 
+        //! all_sum_double
+        void allSumDouble(double *data, uint64_t n);
+
         /// @brief get the processor name
         /// @return processor name
         std::string getProcessorName();

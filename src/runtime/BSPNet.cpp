@@ -245,6 +245,17 @@ void Net::jointGather(void* dataOut, void* dataIn, uint64_t lengthPerProc,
     delete[] ranksInGroup;
 }
 
+//! all_sum_double
+void Net::allSumDouble(double *data, uint64_t n) {
+    double *result = new double[n];
+    for (uint64_t i = 0; i < n; ++ i)
+        result[i] = 0.0;
+    MPI_Allreduce(data, result, (int)n, MPI_DOUBLE, MPI_SUM, _communicator);
+    for (uint64_t i = 0; i < n; ++ i)
+        data[i] = result[i];
+    delete[] result;
+}
+
 uint64_t Net::probe() {
     MPI_Status status;
     MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, _communicator, &status);

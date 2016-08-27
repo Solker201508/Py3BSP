@@ -1528,16 +1528,16 @@ extern "C" {
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", NULL};
-        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL;;
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
         double dPenaltyLevel = 1, dCoLevel = 1;
         int concensusRange = 0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)i: bsp.minimize", (char **)kwlist, 
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)iO: bsp.minimize", (char **)kwlist, 
                 &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod,&dPenaltyLevel,
-                &dCoLevel, &objCoParams, &objCoMultipliers, &concensusRange);
+                &dCoLevel, &objCoParams, &objCoMultipliers, &concensusRange, &objParallel);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.minimize()");
             Py_RETURN_NONE;
@@ -1689,6 +1689,13 @@ extern "C" {
             }
         }
 
+        ParallelOptimization parallel(funValue, funGradient);
+        if (objParallel) {
+            if (PyObject_IsTrue(objParallel)) {
+                funValue = parallelFunValue;
+                funGradient = parallelGradient;
+            }
+        }
         double result = 0.0;
         if (strMethod == NULL) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
@@ -1767,15 +1774,16 @@ extern "C" {
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus",  NULL};
-        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL;;
+        static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
+        PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
         char *strPenalty = NULL, *strMethod = NULL;
         double dPenaltyLevel = 1.0, dCoLevel = 1.0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO): bsp.maximize", (char **)kwlist,
+        int concensusRange = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)ii: bsp.maximize", (char **)kwlist,
                 &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel, 
-                &dCoLevel, &objCoParams, &objCoMultipliers);
+                &dCoLevel, &objCoParams, &objCoMultipliers, &concensusRange, &objParallel);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.maximize()");
             Py_RETURN_NONE;
@@ -1931,6 +1939,13 @@ extern "C" {
 
         if (kMLim > nParams)
             kMLim = nParams;
+        ParallelOptimization(funValue, funGradient);
+        if (objParallel) {
+            if (PyObject_IsTrue(objParallel)) {
+                funValue = parallelFunValue;
+                funGradient = parallelGradient;
+            }
+        }
         double result = 0.0;
         if (strMethod == NULL) {
             LBFGS lbfgs(nParams, funValue, kMaxIter, funGradient, kMLim, 1e-5, params);
@@ -1942,6 +1957,7 @@ extern "C" {
                 lbfgs.setCoLevel(dCoLevel, true);
                 lbfgs.setCoParams(coParams);
                 lbfgs.setCoMultipliers(coMultipliers);
+                lbfgs.setCoRange(concensusRange);
             }
             lbfgs.maximize();
 
@@ -1959,6 +1975,7 @@ extern "C" {
                 lbfgs.setCoLevel(dCoLevel, true);
                 lbfgs.setCoParams(coParams);
                 lbfgs.setCoMultipliers(coMultipliers);
+                lbfgs.setCoRange(concensusRange);
             }
             lbfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
@@ -1975,6 +1992,7 @@ extern "C" {
                 bfgs.setCoLevel(dCoLevel, true);
                 bfgs.setCoParams(coParams);
                 bfgs.setCoMultipliers(coMultipliers);
+                bfgs.setCoRange(concensusRange);
             }
             bfgs.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {
@@ -1991,6 +2009,7 @@ extern "C" {
                 cg.setCoLevel(dCoLevel, true);
                 cg.setCoParams(coParams);
                 cg.setCoMultipliers(coMultipliers);
+                cg.setCoRange(concensusRange);
             }
             cg.maximize();
             for (unsigned long i = 0; i < nParams; ++ i) {

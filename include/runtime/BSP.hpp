@@ -47,6 +47,7 @@
 #include "BSPAlgBFGS.hpp"
 #include "BSPAlgLBFGS.hpp"
 #include "BSPAlgApriori.hpp"
+#include "BSPAlgParallelOptimization.hpp"
 
 #include "BSPRuntime.hpp"
 

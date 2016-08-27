@@ -24,8 +24,8 @@ namespace BSP {
                 virtual ~GradientBasedOptimization();
                 virtual void f();
                 virtual void newF();
-                void g();
-                void newG();
+                virtual void g();
+                virtual void newG();
                 void setPenalty(Penalty penalty);
                 void setPenaltyLevel(double level, bool toMaximize);
                 void setCoLevel(double level, bool toMaximize);

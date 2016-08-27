@@ -132,6 +132,7 @@ void GradientBasedOptimization::newF() {
 void GradientBasedOptimization::g() {
     if (_gradient) {
         _gradient(_nParams, _params, _g);
+
     } else {
         richardson(_params, _g);
     }

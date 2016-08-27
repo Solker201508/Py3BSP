@@ -4,6 +4,8 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <cassert>
+#include "BSPRuntime.hpp"
 
 using namespace BSP;
 using namespace BSP::Algorithm;
@@ -61,6 +63,7 @@ void LBFGS::minimize() {
 }
 
 void LBFGS::optimize() {
+    uint64_t myProcID = Runtime::getActiveRuntime()->getMyProcessID();
     f();
     g();
     _g2 = 0.0;
@@ -97,7 +100,8 @@ void LBFGS::optimize() {
         }
         updateDf();
         //std::cout << "iter = " << _iter << ", f = " << _f << ", scale = " << reductionScale() << ", tol = " << _tol << std::endl;
-        std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+        if (myProcID == 0)
+            std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
         if (_newF != _newF)
             break;
         if (_toMaximize? _newF <= _f : _newF >= _f) {
@@ -126,7 +130,8 @@ void LBFGS::optimize() {
                 _newG2 += _newG[i] * _newG[i];
             }
             updateDf();
-            std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+            if (myProcID == 0)
+                std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
             if (_newF != _newF)
                 break;
             if (_newF == _f)
@@ -135,9 +140,6 @@ void LBFGS::optimize() {
                     : _newF + 1e-5 * fabs(_newF) >= _f - 1e-5 * fabs(_f))
                 break;
         }
-        //double rs = reductionScale();
-        //if (_iter > 3 && (rs < _tol || rs != rs ))
-        //    break;
         update();
     }
 }

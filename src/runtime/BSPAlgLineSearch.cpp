@@ -91,11 +91,14 @@ void LineSearch::optimize() {
         double vmwfu = (_v - _w) * _prevF;
         double vpw = _v + _w;
         double dominiator = vmwfu - umwfv + umvfw;
-        if (dominiator == 0.0) {
+        double factor = (_u - _v) * (_u - _w) * (_v - _w) * dominiator;
+        if (dominiator == 0.0 || factor == 0.0) {
             //std::cout << "dominiator == 0 " << std::endl;
             break;
         }
-        double newW = 0.5 * (vmwfu * vpw - umwfv * upw + umvfw * upv) / dominiator;
+        bool stable = _toMaximize ? factor < 0.0 : factor > 0.0; 
+        double newW = (stable ? 0.5 : -0.5) * (vmwfu * vpw - umwfv * upw + umvfw * upv) / dominiator;
+        //std::cout << "newW = " << newW << std::endl;
         if (_toMaximize) {
             if (_newF < _f) {
                 if (_newF < _prevF) {
@@ -142,8 +145,6 @@ void LineSearch::optimize() {
                 }
             }
         }
-        //std::cout << _iter << ": f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
-        //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
         if (fabs(newW - _w) < 1e-8 * fabs(_w)) {
             //std::cout << _iter << "newW == w" << std::endl;
             break;
@@ -154,6 +155,9 @@ void LineSearch::optimize() {
         }
         _w = newW;
         newF();
+        //std::cout << _iter << ": f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
+        //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
+
         if (_newF != _newF) {
             break;
         }
