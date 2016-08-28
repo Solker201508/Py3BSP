@@ -73,8 +73,13 @@ void LBFGS::optimize() {
     memcpy(_direction, _g, sizeof(double) * _nParams);
     //std::cout << "begin !" << std::endl;
     unsigned int restarted = 0;
+    int countDown = 0;
     for (_iter = 0; _iter < _maxIter; ++_iter) {
-        if (_iter - restarted < _mLim)
+        if (countDown > 0) {
+            findDirection(0);
+            restarted = _iter;
+            -- countDown;
+        } else if (_iter - restarted < _mLim)
             findDirection(_iter - restarted);
         else
             findDirection(_mLim);
@@ -90,8 +95,13 @@ void LBFGS::optimize() {
             std::cout << "iter = " << _iter << ", f = " << std::setprecision(16) << _f << ", newF = " << std::setprecision(16) << _newF << std::endl;
         if (_newF != _newF)
             break;
-        if (_toMaximize? _newF <= _f : _newF >= _f) {
+	if (_toMaximize? _newF - 1e-8 * fabs(_newF) <= _f + 1e-8 * fabs(_f)
+		: _newF + 1e-8 * fabs(_newF) >= _f - 1e-8 * fabs(_f)) {
+            if (countDown > 0)
+                break;
+
             restarted = _iter;
+            countDown = _mLim > 5 ? 5: _mLim;
             memcpy(_direction, _g, sizeof(double) * _nParams);
 
             findDirection(0);
@@ -106,11 +116,9 @@ void LBFGS::optimize() {
                 std::cout << "restarted iter = " << std::setprecision(16) << _iter << ", f = " << std::setprecision(16) << _f << ", newF = " << _newF << std::endl;
             if (_newF != _newF)
                 break;
-            if (_newF == _f)
-                break;
         }
-	if (_toMaximize? _newF - 1e-5 * fabs(_newF) <= _f + 1e-5 * fabs(_f)
-		: _newF + 1e-5 * fabs(_newF) >= _f - 1e-5 * fabs(_f))
+	if (_toMaximize? _newF - 1e-8 * fabs(_newF) <= _f + 1e-8 * fabs(_f)
+		: _newF + 1e-8 * fabs(_newF) >= _f - 1e-8 * fabs(_f))
 	    break;
         update();
     }
