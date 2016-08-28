@@ -2,9 +2,11 @@
 #include "BSPAlgLineSearch.hpp"
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <cassert>
+#include <iomanip>
 #include "BSPRuntime.hpp"
 
 using namespace BSP;
@@ -85,7 +87,7 @@ void LBFGS::optimize() {
         updateDf();
 
         if (myProcID == 0)
-            std::cout << "iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+            std::cout << "iter = " << _iter << ", f = " << std::setprecision(16) << _f << ", newF = " << std::setprecision(16) << _newF << std::endl;
         if (_newF != _newF)
             break;
         if (_toMaximize? _newF <= _f : _newF >= _f) {
@@ -101,15 +103,15 @@ void LBFGS::optimize() {
             }
             updateDf();
             if (myProcID == 0)
-                std::cout << "restarted iter = " << _iter << ", f = " << _f << ", newF = " << _newF << std::endl;
+                std::cout << "restarted iter = " << std::setprecision(16) << _iter << ", f = " << std::setprecision(16) << _f << ", newF = " << _newF << std::endl;
             if (_newF != _newF)
                 break;
             if (_newF == _f)
                 break;
-            if (_toMaximize? _newF - 1e-5 * fabs(_newF) <= _f + 1e-5 * fabs(_f)
-                    : _newF + 1e-5 * fabs(_newF) >= _f - 1e-5 * fabs(_f))
-                break;
         }
+	if (_toMaximize? _newF - 1e-5 * fabs(_newF) <= _f + 1e-5 * fabs(_f)
+		: _newF + 1e-5 * fabs(_newF) >= _f - 1e-5 * fabs(_f))
+	    break;
         update();
     }
 }
@@ -136,7 +138,9 @@ void LBFGS::findDirection(unsigned long myMLim) {
     for (unsigned long i = 0; i < _nParams; ++i) {
         _direction[i] -= rhoBeta * myY[i];
     }
+
     findDirection(myMLim - 1);
+
     double zeta = 0.0;
     for (unsigned long i = 0; i < _nParams; ++i) {
         zeta += myY[i] * _direction[i];
@@ -176,6 +180,7 @@ void LBFGS::update() {
     }
     memcpy(_params, _newParams, sizeof(double) * _nParams);
     memcpy(_g, _newG, sizeof(double) * _nParams);
+
     _f = _newF;
     memcpy(_direction, _newG, sizeof(double) * _nParams);
     _g2 = _newG2;

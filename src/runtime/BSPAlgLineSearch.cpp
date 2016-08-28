@@ -36,6 +36,8 @@ void LineSearch::maximize() {
 }
 
 void LineSearch::optimize() {
+    bool hasUpperBound = false, hasLowerBound = false;
+    double upperBound = 0.0, lowerBound = 0.0;
     memcpy(_params0, _params, _nParams * sizeof(double));
     f();
     double f0 = _f;
@@ -58,6 +60,20 @@ void LineSearch::optimize() {
         _params[i] = _prevParams[i] + _v * _direction[i];
     }
     f();
+    while (_f != _f) {
+	if (_v > 0.0) {
+	    hasUpperBound = true;
+	    upperBound = _v;
+	} else {
+	    hasLowerBound = true;
+	    lowerBound = _v;
+	}
+	_v *= 0.5;
+	for (unsigned long i = 0; i < _nParams; ++i) {
+	    _params[i] = _prevParams[i] + _v * _direction[i];
+	}
+	f();
+    }
 
     if (_toMaximize) {
         while (_f < _prevF) {
@@ -152,6 +168,9 @@ void LineSearch::optimize() {
             //std::cout << _iter << "newW == w" << std::endl;
             break;
         }
+	while ((hasUpperBound && newW >= upperBound) || (hasLowerBound && newW <= lowerBound)) {
+	    newW = _v + 0.5 * (newW - _v);
+	}
         //std::cout << _iter << ": newW - w = " << newW - _w << std::endl;
         for (unsigned long i = 0; i < _nParams; ++i) {
             _newParams[i] = _params[i] + (newW - _v) * _direction[i];
@@ -159,12 +178,20 @@ void LineSearch::optimize() {
         _w = newW;
         newF();
         while (_newF != _newF) {
+	    if (newW > _v) {
+		hasUpperBound = true;
+		upperBound = newW;
+	    } else {
+		hasLowerBound = true;
+		lowerBound = newW;
+	    }
             newW = _v + (newW - _v) * 0.5;
             for (unsigned long i = 0; i < _nParams; ++i) {
                 _newParams[i] = _params[i] + (newW - _v) * _direction[i];
             }
             _w = newW;
             newF();
+	    //std::cout << _iter << ": _w = " << _w << std::endl;
         }
         //std::cout << _iter << ": f(u) = " << _prevF << ", f(v) = " << _f << ", f(w) = " << _newF << std::endl;
         //std::cout << _iter << ": u = " << _u << ", v = " << _v << ", w = " << _w << std::endl;
