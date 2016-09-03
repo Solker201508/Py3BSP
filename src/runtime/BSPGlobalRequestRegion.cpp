@@ -44,6 +44,8 @@ void GlobalRequestRegion::allocateComponents() {
                 new uint64_t[_nComponentsAlongDim[iDim]];
         _upperOffsetInOwnerAlongDim[iDim] =
                 new uint64_t[_nComponentsAlongDim[iDim]];
+        _stepAlongDim[iDim] = 
+            new int32_t[_nComponentsAlongDim[iDim]];
 
         if (_lowerOwnerPositionAlongDim[iDim] == NULL
                 || _lowerOffsetInOwnerAlongDim[iDim] == NULL
@@ -65,6 +67,10 @@ uint64_t GlobalRequestRegion::getRegionWidth(const unsigned iDim,
     uint64_t upper = getNode(iDim,
             _upperOwnerPositionAlongDim[iDim][iComponent])
             + _upperOffsetInOwnerAlongDim[iDim][iComponent];
-    return upper - lower + 1;
+    int32_t step = _stepAlongDim[iDim][iComponent];
+    if (step > 0)
+        return (upper - lower) / step + 1;
+    else
+        return (lower - upper) / (-step) + 1;
 }
 

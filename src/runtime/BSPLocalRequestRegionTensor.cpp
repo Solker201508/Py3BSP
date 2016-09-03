@@ -6,6 +6,7 @@
  */
 
 #include "BSPLocalRequestRegionTensor.hpp"
+#include <iostream>
 
 using namespace BSP;
 
@@ -20,7 +21,7 @@ LocalRequestRegion(shape) {
     uint64_t indexLength = 1 + _numberOfDimensions;
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
         _nComponentsAlongDim[iDim] = indexSet._numberOfComponentsAlongDim[iDim];
-        indexLength += 2 * _nComponentsAlongDim[iDim];
+        indexLength += 3 * _nComponentsAlongDim[iDim];
     }
     allocateComponents();
     allocate(indexLength);
@@ -36,15 +37,19 @@ LocalRequestRegion(shape) {
         memcpy(_upperIndexAlongDim[iDim],
                 indexSet._upperComponentAlongDim[iDim],
                 sizeof (uint64_t) * _nComponentsAlongDim[iDim]);
+        memcpy(_stepAlongDim[iDim], indexSet._stepAlongDim[iDim],
+                sizeof (int32_t) * _nComponentsAlongDim[iDim]);
         for (unsigned iComponent = 0; iComponent < _nComponentsAlongDim[iDim];
                 iComponent++) {
-            _indexList[dstOffset + (iComponent << 1)] =
+            _indexList[dstOffset + (iComponent << 1) + iComponent] =
                     _lowerIndexAlongDim[iDim][iComponent];
-            _indexList[dstOffset + (iComponent << 1) + 1] =
-                    _upperIndexAlongDim[iDim][iComponent]
-                    - _lowerIndexAlongDim[iDim][iComponent] + 1;
+            _indexList[dstOffset + (iComponent << 1) + iComponent + 1] =
+                    (_upperIndexAlongDim[iDim][iComponent]
+                    - _lowerIndexAlongDim[iDim][iComponent]) / _stepAlongDim[iDim][iComponent] + 1;
+            _indexList[dstOffset + (iComponent << 1) + iComponent + 2] = 
+                (uint64_t)_stepAlongDim[iDim][iComponent];
         }
-        dstOffset += 2 * _nComponentsAlongDim[iDim];
+        dstOffset += 3 * _nComponentsAlongDim[iDim];
     }
 }
 

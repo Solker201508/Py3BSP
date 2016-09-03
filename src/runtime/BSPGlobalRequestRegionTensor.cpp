@@ -6,6 +6,7 @@
  */
 
 #include "BSPGlobalRequestRegionTensor.hpp"
+#include <cassert>
 
 using namespace BSP;
 
@@ -66,6 +67,9 @@ GlobalRequestRegion(partition) {
                     indexSet._upperComponentAlongDim[iDim][iComponent]
                     - getNode(iDim,
                     _upperOwnerPositionAlongDim[iDim][iComponent]);
+            _stepAlongDim[iDim][iComponent] =
+                    indexSet._stepAlongDim[iDim][iComponent];
+            assert(_stepAlongDim[iDim][iComponent] == 1);
             for (uint64_t iProc = _lowerOwnerPositionAlongDim[iDim][iComponent];
                     iProc <= _upperOwnerPositionAlongDim[iDim][iComponent];
                     iProc++)

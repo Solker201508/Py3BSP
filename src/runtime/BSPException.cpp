@@ -236,11 +236,12 @@ uint64_t EInvalidElementPosition::getValueOfVar(unsigned iDim) const {
 }
 
 EInvalidRegionDescriptor::EInvalidRegionDescriptor(
-        unsigned iDim, uint64_t iRegion, int64_t begin, int64_t end) {
+        unsigned iDim, uint64_t iRegion, int64_t begin, int64_t end, int32_t step) {
     _iDim = iDim;
     _iRegion = iRegion;
     _begin = begin;
     _end = end;
+    _step = step;
 }
 
 unsigned EInvalidRegionDescriptor::getIDim() const {

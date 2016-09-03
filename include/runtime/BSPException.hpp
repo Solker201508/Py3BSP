@@ -187,7 +187,7 @@ namespace BSP {
     class EInvalidRegionDescriptor : public std::exception {
     public:
         EInvalidRegionDescriptor(unsigned iDim, uint64_t iRegion,
-                int64_t begin, int64_t end);
+                int64_t begin, int64_t end, int32_t step);
         virtual const char *what() const throw ();
         unsigned getIDim() const;
         int64_t getBegin() const;
@@ -198,6 +198,7 @@ namespace BSP {
         uint64_t _iRegion;
         int64_t _begin;
         int64_t _end;
+        int32_t _step;
     };
 
     class EClientArrayTooSmall : public std::exception {

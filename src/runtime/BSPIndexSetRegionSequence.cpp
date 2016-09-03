@@ -62,7 +62,7 @@ uint64_t IndexSetRegionSequence::computeNumberOfIndices(LocalArray &lower,
             k++;
             if (currentUpper < currentLower)
                 throw EInvalidRegionDescriptor(iDim, iRegion, 
-                        currentLower, currentUpper);
+                        currentLower, currentUpper, 1);
             currentRegionSize *= currentUpper - currentLower + 1;
         }
         result += currentRegionSize;

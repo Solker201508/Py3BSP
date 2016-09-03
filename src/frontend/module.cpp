@@ -4,9 +4,12 @@
 #include "BSP.hpp"
 #include <cassert>
 #include <string>
+#include <cstring>
 #include <sstream>
 #include <map>
 #include <iostream>
+#include <sstream>
+#include <cmath>
 #include <sys/time.h>
 
 using namespace BSP;
@@ -20,14 +23,16 @@ PyObject *traceback_ = NULL;
 PyObject *traceback_extractStack_ = NULL;
 PyObject **fromProc_ = NULL;
 uint64_t nProcs_ = 0;
-std::map<IndexSet *, int> indexSetToID_;
-std::map<int, IndexSet *> idToIndexSet_;
-IndexSet *activeIndexSet_ = NULL;
 struct timeval tvStart_, tvStop_;
+std::map<std::string, PyObject *> futures_;
+std::map<PyObject *, std::string> futureIDs_;
+std::map<std::string, std::map<std::string, LocalArray *> > requests_;
+std::map<std::string, std::map<std::string, LocalArray *> > updates_;
+std::string scriptPos_;
 
 Runtime *runtime_ = NULL;
 
-std::string bsp_getScriptPos() {
+void bsp_getScriptPos() {
     std::stringstream ss;
     //ss << runtime_->getMyProcessID() << ": ------ call stack begin ------ " << std::endl;
     PyObject *param = Py_BuildValue("()");
@@ -44,24 +49,25 @@ std::string bsp_getScriptPos() {
             int ok = PyArg_ParseTuple(frame,"slss:bsp.getScriptPos", &fileName,&line,&funcName,&lineText);
             if (!ok) {
                 PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
-                return "";
+                scriptPos_ = "";
+                return;
             }
             ss << "#" << level << ": FILE:" << fileName << ", LINE:" << line << ", FUNCTION:" << funcName << ", CODE:" <<std::endl
                 << ">>> " << lineText << std::endl;
         }
     }
     //ss << runtime_->getMyProcessID() << ": ------  call stack end  ------ " << std::endl;
-    return ss.str();
+    scriptPos_ =  ss.str();
 }
 
 void bsp_typeError(std::string strErr) {
     std::cerr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl
-        << bsp_getScriptPos();
+        << scriptPos_;
 }
 
 void bsp_runtimeError(std::string strErr) {
     std::cerr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl
-        << bsp_getScriptPos();
+        << scriptPos_;
 }
 
 PyObject *PyRetVal(PyObject *obj) {
@@ -82,14 +88,514 @@ class PyRef {
 };
 
 extern "C" {
-    void finiBSP() {
-        for (std::map<IndexSet *, int>::iterator iter = indexSetToID_.begin();
-                iter != indexSetToID_.end(); ++iter) {
-            delete iter->first;
+    PyObject *localArrayAsNumpy(LocalArray *localArray) {
+        PyObject *output = NULL;
+        try {
+            ArrayShape::ElementType elemType = localArray->getElementType();
+            int typeNum = NPY_DOUBLE;
+            switch (elemType) {
+                case ArrayShape::INT8:
+                    typeNum = NPY_INT8;
+                    break;
+                case ArrayShape::INT16:
+                    typeNum = NPY_INT16;
+                    break;
+                case ArrayShape::INT32:
+                    typeNum = NPY_INT32;
+                    break;
+                case ArrayShape::INT64:
+                    typeNum = NPY_INT64;
+                    break;
+                case ArrayShape::UINT8:
+                    typeNum = NPY_UINT8;
+                    break;
+                case ArrayShape::UINT16:
+                    typeNum = NPY_UINT16;
+                    break;
+                case ArrayShape::UINT32:
+                    typeNum = NPY_UINT32;
+                    break;
+                case ArrayShape::UINT64:
+                    typeNum = NPY_UINT64;
+                    break;
+                case ArrayShape::FLOAT:
+                    typeNum = NPY_FLOAT;
+                    break;
+                case ArrayShape::DOUBLE:
+                    typeNum = NPY_DOUBLE;
+                    break;
+                case ArrayShape::CFLOAT:
+                    typeNum = NPY_CFLOAT;
+                    break;
+                case ArrayShape::CDOUBLE:
+                    typeNum = NPY_CDOUBLE;
+                    break;
+                default:
+                    break;
+            }
+            int nDims = (int) localArray->getNumberOfDimensions();
+            npy_intp dimSize[7];
+            for (int iDim = 0; iDim < nDims; ++iDim) {
+                dimSize[iDim] = (npy_intp) localArray->getElementCount(iDim);
+            }
+            output = PyArray_SimpleNewFromData(nDims,dimSize,typeNum, localArray->getData());
+            if (!PyArray_Check(output)) {
+                bsp_runtimeError("failed to call PyArray_SimpleNewWithData() in bsp.toNumpy(arrayPath)");
+                Py_XDECREF(output);
+                Py_RETURN_NONE;
+            }
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+            Py_XDECREF(output);
+            Py_RETURN_NONE;
         }
-        indexSetToID_.clear();
-        idToIndexSet_.clear();
-        activeIndexSet_ = NULL;
+        return output;
+    }
+
+    PyObject *arrayAsNumpy(char *path) {
+        try {
+            NamedObject *nobj = runtime_->getObject(std::string(path));
+            LocalArray *localArray = nobj->_localArray();
+            return localArrayAsNumpy(localArray);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+            Py_RETURN_NONE;
+        }
+    }
+
+    static PyObject *Future_init(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        unsigned long procID = 0;
+        char *varName = NULL;
+        char *op = NULL;
+        PyObject *objSelf = NULL;
+        int ok = PyArg_ParseTuple(args, "Oks|s:Future.init", &objSelf, &procID, &varName, &op);
+        if (!ok) {
+            bsp_typeError("invalid params for Future.init");
+            Py_RETURN_NONE;
+        }
+
+        if (procID >= runtime_->getNumberOfProcesses() || procID == runtime_->getMyProcessID()) {
+            bsp_typeError("invalid procID");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjServer = runtime_->getObject(varName);
+        if (ARRAY != nobjServer->getType()) {
+            bsp_typeError("invalid varName");
+            Py_RETURN_NONE;
+        }
+        if (!nobjServer->isGlobal()) {
+            ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
+            if (NULL == registration) {
+                bsp_typeError("unregistered server array");
+                Py_RETURN_NONE;
+            }
+        }
+
+        uint16_t opID = LocalArray::OPID_ASSIGN;
+        if (op) {
+            if (0 == strcmp(op, "="))
+                opID = LocalArray::OPID_ASSIGN;
+            else if (0 == strcmp(op, "+") || 0 == strcmp(op, "+="))
+                opID = LocalArray::OPID_ADD;
+            else if (0 == strcmp(op, "*") || 0 == strcmp(op, "*="))
+                opID = LocalArray::OPID_MUL;
+            else if (0 == strcmp(op, "&") || 0 == strcmp(op, "&="))
+                opID = LocalArray::OPID_AND;
+            else if (0 == strcmp(op, "|") || 0 == strcmp(op, "|="))
+                opID = LocalArray::OPID_OR;
+            else if (0 == strcmp(op, "^") || 0 == strcmp(op, "^="))
+                opID = LocalArray::OPID_XOR;
+            else if (0 == strcmp(op, "min") || 0 == strcmp(op, "min="))
+                opID = LocalArray::OPID_MIN;
+            else if (0 == strcmp(op, "max") || 0 == strcmp(op, "max="))
+                opID = LocalArray::OPID_MAX;
+            else {
+                bsp_typeError("unrecognized op");
+                Py_RETURN_NONE;
+            }
+        }
+
+        std::stringstream ss;
+        ss << procID << ":" << opID << ":" << varName;
+        std::string futureID = ss.str();
+        if (futures_.find(futureID) != futures_.end()) {
+            bsp_runtimeError(futureID + " already exists in futures_");
+            Py_RETURN_NONE;
+        }
+        futures_[futureID] = objSelf;
+        futureIDs_[objSelf] = futureID;
+        Py_RETURN_NONE;
+    }
+
+    void Future_clearUpdates(PyObject *self) {
+        std::string futureID = futureIDs_[self];
+        std::map<std::string, LocalArray *> &myUpdates = updates_[futureID];
+        for (std::map<std::string, LocalArray *>::iterator iter = myUpdates.begin();
+                iter != myUpdates.end(); ++ iter) {
+            delete iter->second;
+            std::cout << futureID << "#" << iter->first << " deleted" << std::endl;
+        }
+        myUpdates.clear();
+    }
+
+    void Future_clearRequests(PyObject *self) {
+        std::string futureID = futureIDs_[self];
+        std::map<std::string, LocalArray *> &myRequests = requests_[futureID];
+        for (std::map<std::string, LocalArray *>::iterator iter = myRequests.begin();
+                iter != myRequests.end(); ++ iter) {
+            delete iter->second;
+        }
+        myRequests.clear();
+    }
+
+    static PyObject *Future_del(PyObject *self, PyObject *args) {
+        PyObject *objSelf = NULL;
+        int ok = PyArg_ParseTuple(args, "O:Future.__del__",&objSelf);
+        if (!ok) {
+            bsp_typeError("invalid params for Future.del");
+            Py_RETURN_NONE;
+        }
+        Future_clearUpdates(objSelf);
+        Future_clearRequests(objSelf);
+        std::string futureID = futureIDs_[objSelf];
+        futures_.erase(futureID);
+        futureIDs_.erase(objSelf);
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *Future_getItem(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        PyObject *objSelf = NULL, *objIndex = NULL;
+        int ok = PyArg_ParseTuple(args, "OO", &objSelf, &objIndex);
+        if (!ok) {
+            bsp_typeError("invalid index");
+            Py_RETURN_NONE;
+        }
+
+        std::string futureID = futureIDs_[objSelf];
+
+        unsigned long procID = 0;
+        size_t posColon = futureID.find(':', 0); 
+        assert(posColon != (size_t) (-1));
+        assert (1 == sscanf(futureID.substr(0, posColon).c_str(), "%lu", &procID));
+
+        unsigned int opIDL = LocalArray::OPID_ASSIGN;
+        std::string remain = futureID.substr(posColon + 1);
+        posColon = remain.find(':', 0);
+        assert(posColon != (size_t) (-1));
+        assert (1 == sscanf(remain.substr(0, posColon).c_str(), "%u", &opIDL));
+        uint16_t opID = (uint16_t) opIDL;
+
+        if (opID != LocalArray::OPID_ASSIGN) {
+            bsp_typeError("unsupported op for getItem");
+            Py_RETURN_NONE;
+        }
+
+        std::string varName = remain.substr(posColon + 1);
+
+        NamedObject *nobjServer = runtime_->getObject(varName);
+        if (ARRAY != nobjServer->getType()) {
+            bsp_typeError("invalid varName");
+            Py_RETURN_NONE;
+        }
+
+        Py_ssize_t nDims = 1;
+        if (PyTuple_Check(objIndex)) {
+            nDims = PyTuple_GET_SIZE(objIndex);
+            assert(nDims <= 7 && nDims > 0);
+        }
+
+        Py_ssize_t start[7], stop[7], step[7], sliceLength[7];
+        if (nobjServer->isGlobal()) {
+            GlobalArray *globalArray = nobjServer->_globalArray();
+            if (globalArray->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = globalArray->getElementCount(iDim);
+                sliceLength[iDim] = dimSize;
+            }
+        } else {
+            ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
+            assert(NULL != registration);
+            ArrayShape *shape = registration->getArrayShape(procID);
+            if (shape->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            if (shape->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = shape->getElementCount(iDim);
+                sliceLength[iDim] = dimSize;
+            }
+        }
+
+        if (PyTuple_Check(objIndex)) {
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
+                if (!PySlice_Check(objDim)) {
+                    bsp_typeError("only slice indices are supported");
+                    Py_RETURN_NONE;
+                }
+                PySlice_GetIndices(objDim, sliceLength[iDim], start + iDim, stop + iDim, step + iDim);
+            }
+        } else {
+            if (!PySlice_Check(objIndex)) {
+                bsp_typeError("only slice indices are supported");
+                Py_RETURN_NONE;
+            }
+            PySlice_GetIndices(objIndex, sliceLength[0], start, stop, step);
+        }
+
+        uint64_t myStart[7], myStop[7];
+        int32_t myStep[7];
+        uint64_t elemCountAlongDim[7];
+        std::stringstream ss;
+        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+            myStart[iDim] = start[iDim];
+            myStop[iDim] = stop[iDim];
+            myStep[iDim] = step[iDim];
+            int64_t dimSize = ((int64_t)stop[iDim] - (int64_t)start[iDim] - 1) / (int32_t)step[iDim] + 1;
+            if (dimSize <= 0) {
+                bsp_typeError("invalid slice");
+                Py_RETURN_NONE;
+            }
+            elemCountAlongDim[iDim] = dimSize;
+            ss << start[iDim] << ":" << stop[iDim] << ":" << step[iDim] << ";";
+        }
+        std::string rangeID = ss.str();
+
+        ArrayShape::ElementType elementType;
+        uint64_t numberOfBytesPerElement;
+        if (nobjServer->isGlobal()) {
+            GlobalArray *globalArray = nobjServer->_globalArray();
+            elementType = globalArray->getElementType();
+            numberOfBytesPerElement = globalArray->getNumberOfBytesPerElement();
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = globalArray->getElementCount(iDim);
+                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
+                    bsp_typeError("out-of-range index");
+                    Py_RETURN_NONE;
+                }
+            }
+        } else {
+            ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
+            assert(NULL != registration);
+            ArrayShape *shape = registration->getArrayShape(procID);
+            elementType = shape->getElementType();
+            numberOfBytesPerElement = shape->getNumberOfBytesPerElement();
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = shape->getElementCount(iDim);
+                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
+                    bsp_typeError("out-of-range index");
+                    Py_RETURN_NONE;
+                }
+            }
+        }
+
+        std::map<std::string, LocalArray *> &myRequests = requests_[futureID];
+        std::map<std::string, LocalArray *>::iterator iter = myRequests.find(rangeID);
+        LocalArray *clientArray = NULL;
+        if (iter == myRequests.end()) {
+            clientArray = new LocalArray("", elementType, numberOfBytesPerElement, nDims, elemCountAlongDim);
+            myRequests[rangeID] = clientArray;
+        } else {
+            clientArray = iter->second;
+        }
+        IndexSetRegionTensor indexSet(nDims, myStart, myStop, myStep);
+
+        if (nobjServer->isGlobal()) {
+            runtime_->requestFrom(*nobjServer->_globalArray(), indexSet, *clientArray, scriptPos_);
+        } else {
+            runtime_->requestFrom(*nobjServer->_localArray(), procID, indexSet, *clientArray, scriptPos_);
+        }
+        return localArrayAsNumpy(clientArray);
+    }
+
+    static PyObject *Future_setItem(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        PyObject *objSelf = NULL, *objIndex = NULL, *objValue = NULL;
+        int ok = PyArg_ParseTuple(args, "OOO", &objSelf, &objIndex, &objValue);
+        if (!ok) {
+            bsp_typeError("invalid params");
+            Py_RETURN_NONE;
+        }
+        bool requested = false;
+
+        std::string futureID = futureIDs_[objSelf];
+
+        unsigned long procID = 0;
+        size_t posColon = futureID.find(':', 0); 
+        assert(posColon != (size_t) (-1));
+        assert (1 == sscanf(futureID.substr(0, posColon).c_str(), "%lu", &procID));
+
+        unsigned int opIDL = LocalArray::OPID_ASSIGN;
+        std::string remain = futureID.substr(posColon + 1);
+        posColon = remain.find(':', 0);
+        assert(posColon != (size_t) (-1));
+        assert (1 == sscanf(remain.substr(0, posColon).c_str(), "%u", &opIDL));
+        uint16_t opID = (uint16_t) opIDL;
+
+        std::string varName = remain.substr(posColon + 1);
+
+        NamedObject *nobjServer = runtime_->getObject(varName);
+        if (ARRAY != nobjServer->getType()) {
+            bsp_typeError("invalid varName");
+            Py_RETURN_NONE;
+        }
+
+        Py_ssize_t nDims = 1;
+        if (PyTuple_Check(objIndex)) {
+            nDims = PyTuple_GET_SIZE(objIndex);
+            assert(nDims <= 7 && nDims > 0);
+        }
+
+        Py_ssize_t start[7], stop[7], step[7], sliceLength[7];
+        if (nobjServer->isGlobal()) {
+            GlobalArray *globalArray = nobjServer->_globalArray();
+            if (globalArray->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = globalArray->getElementCount(iDim);
+                sliceLength[iDim] = dimSize;
+            }
+        } else {
+            ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
+            assert(NULL != registration);
+            ArrayShape *shape = registration->getArrayShape(procID);
+            if (shape->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            if (shape->getNumberOfDimensions() != nDims) {
+                bsp_typeError("invalid nDims of index");
+                Py_RETURN_NONE;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = shape->getElementCount(iDim);
+                sliceLength[iDim] = dimSize;
+            }
+        }
+
+        if (PyTuple_Check(objIndex)) {
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
+                if (!PySlice_Check(objDim)) {
+                    bsp_typeError("only slice indices are supported");
+                    Py_RETURN_NONE;
+                }
+                PySlice_GetIndices(objDim, sliceLength[iDim], start + iDim, stop + iDim, step + iDim);
+            }
+        } else {
+            if (!PySlice_Check(objIndex)) {
+                bsp_typeError("only slice indices are supported");
+                Py_RETURN_NONE;
+            }
+            PySlice_GetIndices(objIndex, sliceLength[0], start, stop, step);
+        }
+
+        uint64_t myStart[7], myStop[7];
+        int32_t myStep[7];
+        uint64_t elemCountAlongDim[7];
+        std::stringstream ss;
+        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+            myStart[iDim] = start[iDim];
+            myStop[iDim] = stop[iDim];
+            myStep[iDim] = step[iDim];
+            int64_t dimSize = ((int64_t)stop[iDim] - (int64_t)start[iDim] - 1) / (int32_t)step[iDim] + 1;
+            if (dimSize <= 0) {
+                bsp_typeError("invalid slice");
+                Py_RETURN_NONE;
+            }
+            elemCountAlongDim[iDim] = dimSize;
+            ss << start[iDim] << ":" << stop[iDim] << ":" << step[iDim] << ";";
+        }
+        std::string rangeID = ss.str();
+
+        ArrayShape::ElementType elementType;
+        uint64_t numberOfBytesPerElement;
+        if (nobjServer->isGlobal()) {
+            GlobalArray *globalArray = nobjServer->_globalArray();
+            elementType = globalArray->getElementType();
+            numberOfBytesPerElement = globalArray->getNumberOfBytesPerElement();
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = globalArray->getElementCount(iDim);
+                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
+                    bsp_typeError("out-of-range index");
+                    Py_RETURN_NONE;
+                }
+            }
+        } else {
+            ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
+            assert(NULL != registration);
+            ArrayShape *shape = registration->getArrayShape(procID);
+            elementType = shape->getElementType();
+            numberOfBytesPerElement = shape->getNumberOfBytesPerElement();
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = shape->getElementCount(iDim);
+                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
+                    bsp_typeError("out-of-range index");
+                    Py_RETURN_NONE;
+                }
+            }
+        }
+
+        std::map<std::string, LocalArray *> &myUpdates = updates_[futureID];
+        std::map<std::string, LocalArray *>::iterator iter = myUpdates.find(rangeID);
+        LocalArray *clientArray = NULL;
+        if (iter == myUpdates.end()) {
+            clientArray = new LocalArray("", elementType, numberOfBytesPerElement, nDims, elemCountAlongDim);
+            myUpdates[rangeID] = clientArray;
+        } else {
+            requested = true;
+            clientArray = iter->second;
+        }
+        if (!requested) {
+            IndexSetRegionTensor indexSet(nDims, myStart, myStop, myStep);
+            if (nobjServer->isGlobal()) {
+                runtime_->requestTo(*nobjServer->_globalArray(), indexSet, *clientArray, opID, scriptPos_);
+            } else {
+                runtime_->requestTo(*nobjServer->_localArray(), procID, indexSet, *clientArray, opID, scriptPos_);
+            }
+        }
+        try {
+            PyArrayObject *updArray = (PyArrayObject *)localArrayAsNumpy(clientArray);
+            if (PyArray_Check(objValue)) {
+                PyArrayObject *valueArray = (PyArrayObject *)objValue;
+                if (0 > PyArray_CopyInto(updArray, valueArray)) {
+                    bsp_runtimeError("invalid value");
+                    Py_RETURN_NONE;
+                }
+            } else {
+                PyArray_FillWithScalar(updArray, objValue);
+            }
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+            Py_RETURN_NONE;
+        }
+
+        Py_RETURN_NONE;
+    }
+
+    static PyMethodDef FutureMethods[] = 
+    {
+        {"__init__", Future_init, METH_VARARGS,  "init future object with procID, varName and op"},
+        {"__del__", Future_del, METH_VARARGS,  "delete future object"},
+        {"__getitem__", Future_getItem, METH_VARARGS, "get item"},
+        {"__setitem__", Future_setItem, METH_VARARGS, "set item"},
+        {NULL, NULL, 0, NULL}
+    };
+
+
+    void finiBSP() {
         Py_XDECREF(pickle_dumps_);
         Py_XDECREF(pickle_loads_);
         Py_XDECREF(ctypes_addressof_);
@@ -117,6 +623,7 @@ extern "C" {
 
     // myProcID = bsp.myProcID()
     static PyObject *bsp_myProcID(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         int ok = PyArg_ParseTuple(args,":bsp.myProcID");
         if (!ok) {
             bsp_typeError("bsp.myProcID requires no arguments");
@@ -128,6 +635,7 @@ extern "C" {
 
     // procCount = bsp.procCount()
     static PyObject *bsp_procCount(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         int ok = PyArg_ParseTuple(args,":bsp.procCount");
         if (!ok) {
             bsp_typeError("bsp.procCount requires no arguments");
@@ -138,6 +646,7 @@ extern "C" {
 
     // importedFromProcID = bsp.fromProc(procID)
     static PyObject *bsp_fromProc(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         long procID;
         int ok = PyArg_ParseTuple(args,"l:bsp.fromProc", &procID);
         if (!ok) {
@@ -153,6 +662,7 @@ extern "C" {
 
     // OK = bsp.fromObject(object,arrayPath)
     static PyObject *bsp_fromObject(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromObject",&input,&path);
@@ -221,6 +731,7 @@ extern "C" {
 
     // OK = bsp.fromNumpy(numpyArray,arrayPath)
     static PyObject *bsp_fromNumpy(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromNumpy",&input,&path);
@@ -243,6 +754,7 @@ extern "C" {
 
     // object = bsp.toObject(arrayPath)
     static PyObject *bsp_toObject(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         PyObject *output = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.toObject",&path);
@@ -272,6 +784,7 @@ extern "C" {
 
     // numpyArray = bsp.toNumpy(arrayPath)
     static PyObject *bsp_toNumpy(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         PyObject *output = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.toNumpy",&path);
@@ -347,91 +860,34 @@ extern "C" {
 
     // numpyArray = bsp.asNumpy(arrayPath)
     static PyObject *bsp_asNumpy(PyObject *self, PyObject *args) {
-        PyObject *output = NULL;
+        bsp_getScriptPos();
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.asNumpy",&path);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.asNumpy(arrayPath)");
             Py_RETURN_NONE;
         }
-        try {
-            NamedObject *nobj = runtime_->getObject(std::string(path));
-            LocalArray *localArray = nobj->_localArray();
-            ArrayShape::ElementType elemType = localArray->getElementType();
-            int typeNum = NPY_DOUBLE;
-            switch (elemType) {
-                case ArrayShape::INT8:
-                    typeNum = NPY_INT8;
-                    break;
-                case ArrayShape::INT16:
-                    typeNum = NPY_INT16;
-                    break;
-                case ArrayShape::INT32:
-                    typeNum = NPY_INT32;
-                    break;
-                case ArrayShape::INT64:
-                    typeNum = NPY_INT64;
-                    break;
-                case ArrayShape::UINT8:
-                    typeNum = NPY_UINT8;
-                    break;
-                case ArrayShape::UINT16:
-                    typeNum = NPY_UINT16;
-                    break;
-                case ArrayShape::UINT32:
-                    typeNum = NPY_UINT32;
-                    break;
-                case ArrayShape::UINT64:
-                    typeNum = NPY_UINT64;
-                    break;
-                case ArrayShape::FLOAT:
-                    typeNum = NPY_FLOAT;
-                    break;
-                case ArrayShape::DOUBLE:
-                    typeNum = NPY_DOUBLE;
-                    break;
-                case ArrayShape::CFLOAT:
-                    typeNum = NPY_CFLOAT;
-                    break;
-                case ArrayShape::CDOUBLE:
-                    typeNum = NPY_CDOUBLE;
-                    break;
-                default:
-                    break;
-            }
-            int nDims = (int) localArray->getNumberOfDimensions();
-            npy_intp dimSize[7];
-            for (int iDim = 0; iDim < nDims; ++iDim) {
-                dimSize[iDim] = (npy_intp) localArray->getElementCount(iDim);
-            }
-            output = PyArray_SimpleNewFromData(nDims,dimSize,typeNum, localArray->getData());
-            if (!PyArray_Check(output)) {
-                bsp_runtimeError("failed to call PyArray_SimpleNewWithData() in bsp.toNumpy(arrayPath)");
-                Py_XDECREF(output);
-                Py_RETURN_NONE;
-            }
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            Py_XDECREF(output);
-            Py_RETURN_NONE;
-        }
-        return output;
+        return arrayAsNumpy(path);
     }
 
-    // OK = bsp.createArray(arrayPath,dtype,arrayShape)
-    static PyObject *bsp_createArray(PyObject *self, PyObject *args) {
+    // OK = bsp.array(arrayPath,dtype,arrayShape)
+    static PyObject *bsp_array(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
+        static const char * kwlist[] = {"path", "shape", "dtype", "fill", NULL};
         char *arrayPath = NULL;
         char *dtype = NULL;
         PyObject *arrayShape = NULL;
         uint64_t dimSize[7] = {0,0,0,0,0,0,0};
-        int ok = PyArg_ParseTuple(args,"ssO:bsp.createArray",&arrayPath,&dtype,&arrayShape);
+        double fill = sqrt(-1);
+        int ok = PyArg_ParseTupleAndKeywords(args,kwargs,"sO|sd:bsp.array",(char **)kwlist,&arrayPath,&arrayShape,&dtype,&fill);
+
         PyRef refArrayShape(arrayShape);
         if (!ok) {
-            bsp_typeError("invalid arguments for bsp.createArray(arrayPath,dtype,arrayShape)");
+            bsp_typeError("invalid arguments for bsp.array(arrayPath,arrayShape)");
             Py_RETURN_FALSE;
         }
         if (PyTuple_Check(arrayShape)) {
-            ok = PyArg_ParseTuple(arrayShape,"k|kkkkkk:bsp.createArray.extractArrayShape",
+            ok = PyArg_ParseTuple(arrayShape,"k|kkkkkk:bsp.array.extractArrayShape",
                     (unsigned long *)(dimSize + 0),
                     (unsigned long *)(dimSize + 1),
                     (unsigned long *)(dimSize + 2),
@@ -440,7 +896,7 @@ extern "C" {
                     (unsigned long *)(dimSize + 5),
                     (unsigned long *)(dimSize + 6));
             if (!ok || dimSize[0] == 0) {
-                bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
+                bsp_typeError("invalid array shape for bsp.array(arrayPath,arrayShape)");
                 Py_RETURN_FALSE;
             }
         } else if (PyList_Check(arrayShape)) {
@@ -455,11 +911,11 @@ extern "C" {
                 dimSize[iItem] = sizeOfThisDim;
             }
             if (!ok || dimSize[0] == 0) {
-                bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
+                bsp_typeError("invalid array shape for bsp.array(arrayPath,arrayShape)");
                 Py_RETURN_FALSE;
             }
         } else {
-            bsp_typeError("invalid array shape for bsp.createArray(arrayPath,dtype,arrayShape)");
+            bsp_typeError("invalid array shape for bsp.array(arrayPath,arrayShape)");
             Py_RETURN_FALSE;
         }
 
@@ -471,52 +927,244 @@ extern "C" {
             ++ nDims;
         }
 
-        ArrayShape::ElementType elemType = ArrayShape::BINARY;
-        if (0 == strcmp(dtype,"i1") || 0 == strcmp(dtype,"int8"))
-            elemType = ArrayShape::INT8;
-        else if (0 == strcmp(dtype,"i2") || 0 == strcmp(dtype,"int16"))
-            elemType = ArrayShape::INT16;
-        else if (0 == strcmp(dtype,"i4") || 0 == strcmp(dtype,"int32"))
-            elemType = ArrayShape::INT32;
-        else if (0 == strcmp(dtype,"i8") || 0 == strcmp(dtype,"int64"))
-            elemType = ArrayShape::INT64;
-        else if (0 == strcmp(dtype,"u1") || 0 == strcmp(dtype,"uint8"))
-            elemType = ArrayShape::UINT8;
-        else if (0 == strcmp(dtype,"u2") || 0 == strcmp(dtype,"uint16"))
-            elemType = ArrayShape::UINT16;
-        else if (0 == strcmp(dtype,"u4") || 0 == strcmp(dtype,"uint32"))
-            elemType = ArrayShape::UINT32;
-        else if (0 == strcmp(dtype,"u8") || 0 == strcmp(dtype,"uint64"))
-            elemType = ArrayShape::UINT64;
-        else if (0 == strcmp(dtype,"f") || 0 == strcmp(dtype,"f4") || 0 == strcmp(dtype,"float32"))
-            elemType = ArrayShape::FLOAT;
-        else if (0 == strcmp(dtype,"d") || 0 == strcmp(dtype,"f8") || 0 == strcmp(dtype,"float64"))
-            elemType = ArrayShape::DOUBLE;
-        else if (0 == strcmp(dtype,"c8") || 0 == strcmp(dtype,"complex64"))
-            elemType = ArrayShape::CFLOAT;
-        else if (0 == strcmp(dtype,"c") || 0 == strcmp(dtype,"c16") || 0 == strcmp(dtype,"complex128"))
-            elemType = ArrayShape::CDOUBLE;
-        if (elemType == ArrayShape::BINARY) {
-            bsp_typeError("invalid dtype for bsp.createArray(arrayPath,dtype,arrayShape)");
-            Py_RETURN_FALSE;
+        ArrayShape::ElementType elemType = ArrayShape::DOUBLE;
+        if (dtype) {
+            if (0 == strcmp(dtype,"i1") || 0 == strcmp(dtype,"int8"))
+                elemType = ArrayShape::INT8;
+            else if (0 == strcmp(dtype,"i2") || 0 == strcmp(dtype,"int16"))
+                elemType = ArrayShape::INT16;
+            else if (0 == strcmp(dtype,"i4") || 0 == strcmp(dtype,"int32"))
+                elemType = ArrayShape::INT32;
+            else if (0 == strcmp(dtype,"i8") || 0 == strcmp(dtype,"int64"))
+                elemType = ArrayShape::INT64;
+            else if (0 == strcmp(dtype,"u1") || 0 == strcmp(dtype,"uint8"))
+                elemType = ArrayShape::UINT8;
+            else if (0 == strcmp(dtype,"u2") || 0 == strcmp(dtype,"uint16"))
+                elemType = ArrayShape::UINT16;
+            else if (0 == strcmp(dtype,"u4") || 0 == strcmp(dtype,"uint32"))
+                elemType = ArrayShape::UINT32;
+            else if (0 == strcmp(dtype,"u8") || 0 == strcmp(dtype,"uint64"))
+                elemType = ArrayShape::UINT64;
+            else if (0 == strcmp(dtype,"f") || 0 == strcmp(dtype,"f4") || 0 == strcmp(dtype,"float32"))
+                elemType = ArrayShape::FLOAT;
+            else if (0 == strcmp(dtype,"d") || 0 == strcmp(dtype,"f8") || 0 == strcmp(dtype,"float64"))
+                elemType = ArrayShape::DOUBLE;
+            else if (0 == strcmp(dtype,"c8") || 0 == strcmp(dtype,"complex64"))
+                elemType = ArrayShape::CFLOAT;
+            else if (0 == strcmp(dtype,"c") || 0 == strcmp(dtype,"c16") || 0 == strcmp(dtype,"complex128"))
+                elemType = ArrayShape::CDOUBLE;
+            if (elemType == ArrayShape::BINARY) {
+                bsp_typeError("invalid dtype for bsp.array(arrayPath,arrayShape)");
+                Py_RETURN_FALSE;
+            }
         }
+
         uint64_t elemSize = ArrayShape::elementSize(elemType);
         try {
             LocalArray *localArray = new LocalArray(std::string(arrayPath), elemType, elemSize, nDims, dimSize);
             if (localArray == NULL) {
-                bsp_runtimeError("failed to call bsp.createArray(arrayPath,dtype,arrayShape)");
+                bsp_runtimeError("failed to call bsp.array(arrayPath,arrayShape)");
                 Py_RETURN_FALSE;
             }
             runtime_->setObject(std::string(arrayPath), localArray);
+            if (fill == fill) {
+                uint64_t arraySize = localArray->getElementCount(LocalArray::ALL_DIMS);
+                switch (elemType) {
+                    case ArrayShape::INT8: 
+                        {
+                            int8_t src = round(fill);
+                            int8_t *dst = (int8_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::INT16:
+                        {
+                            int16_t src = round(fill);
+                            int16_t *dst = (int16_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::INT32:
+                        {
+                            int32_t src = round(fill);
+                            int32_t *dst = (int32_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::INT64:
+                        {
+                            int64_t src = round(fill);
+                            int64_t *dst = (int64_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::UINT8:
+                        {
+                            uint8_t src = round(fill);
+                            uint8_t *dst = (uint8_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::UINT16:
+                        {
+                            uint16_t src = round(fill);
+                            uint16_t *dst = (uint16_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::UINT32:
+                        {
+                            uint32_t src = round(fill);
+                            uint32_t *dst = (uint32_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::UINT64:
+                        {
+                            uint64_t src = round(fill);
+                            uint64_t *dst = (uint64_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::FLOAT:
+                        {
+                            float src = fill;
+                            float *dst = (float *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::DOUBLE:
+                        {
+                            double src = fill;
+                            double *dst = (double *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i)
+                                dst[i] = src;
+                            break;
+                        }
+                    case ArrayShape::CINT8: 
+                        {
+                            int8_t src = round(fill);
+                            int8_t *dst = (int8_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CINT16:
+                        {
+                            int16_t src = round(fill);
+                            int16_t *dst = (int16_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CINT32:
+                        {
+                            int32_t src = round(fill);
+                            int32_t *dst = (int32_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CINT64:
+                        {
+                            int64_t src = round(fill);
+                            int64_t *dst = (int64_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CUINT8:
+                        {
+                            uint8_t src = round(fill);
+                            uint8_t *dst = (uint8_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CUINT16:
+                        {
+                            uint16_t src = round(fill);
+                            uint16_t *dst = (uint16_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CUINT32:
+                        {
+                            uint32_t src = round(fill);
+                            uint32_t *dst = (uint32_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CUINT64:
+                        {
+                            uint64_t src = round(fill);
+                            uint64_t *dst = (uint64_t *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CFLOAT:
+                        {
+                            float src = fill;
+                            float *dst = (float *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    case ArrayShape::CDOUBLE:
+                        {
+                            double src = fill;
+                            double *dst = (double *)localArray->getData();
+                            for (uint64_t i = 0; i < arraySize; ++ i) {
+                                dst[i << 1] = src;
+                                dst[(i << 1) + 1] = 0.0;
+                            }
+                            break;
+                        }
+                    default:
+                        break;
+                }
+                localArray->getData();
+            }
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             Py_RETURN_FALSE;
         }
-        Py_RETURN_TRUE;
+        return arrayAsNumpy(arrayPath);
     }
 
     // OK = bsp.delete(up-to-10-paths)
     static PyObject *bsp_delete(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         PyObject *obj[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "O|OOOOOOOOO:bsp.delete",
                 obj + 0,
@@ -539,17 +1187,6 @@ extern "C" {
             try {
                 if (PyUnicode_Check(obj[i])) {
                     runtime_->deleteObject(std::string(PyUnicode_AsUTF8(obj[i])));
-                } else if (PyLong_Check(obj[i])) {
-                    long j = PyLong_AsLong(obj[i]);
-                    if (idToIndexSet_.find(j) != idToIndexSet_.end()) {
-                        IndexSet *indexSet = idToIndexSet_[j];
-                        if (activeIndexSet_ == indexSet)
-                            activeIndexSet_ = NULL;
-                        indexSetToID_.erase(indexSet);
-                        idToIndexSet_.erase(j);
-                        if (indexSet)
-                            delete indexSet;
-                    }
                 } else {
                     std::stringstream ssErr;
                     ssErr << "invalid argument " << i << " for bsp.delete" << std::endl;
@@ -567,6 +1204,7 @@ extern "C" {
 
     // OK = bsp.share(up-to-10-array-Paths)
     static PyObject *bsp_share(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "s|sssssssss:bsp.share",
                 path + 0,
@@ -600,6 +1238,7 @@ extern "C" {
 
     // OK = bsp.globalize(procStart,gridShape,up-to-10-array-Paths)
     static PyObject *bsp_globalize(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         uint64_t procStart = 0;
         PyObject *objGridShape = NULL;
         uint64_t gridDimSize[7] = {0,0,0,0,0,0,0};
@@ -658,6 +1297,7 @@ extern "C" {
 
     // OK = bsp.privatize(up-to-10-array-paths)
     static PyObject *bsp_privatize(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args,"s|sssssssss:bsp.privatize",
                 path + 0,
@@ -689,572 +1329,9 @@ extern "C" {
         Py_RETURN_TRUE;
     }
 
-    IndexSet *bsp_regionTensor(unsigned n, PyObject **lowerObject, PyObject **upperObject) {
-        LocalArray *lower[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        LocalArray *upper[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        try {
-            for (unsigned i = 0; i < n; ++i) {
-                if (PyUnicode_Check(lowerObject[i])) {
-                    NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject[i])));
-                    lower[i] = nobjLower->_localArray();
-                } else 
-                    lower[i] = bsp_convertObject(lowerObject[i], "");
-                if (PyUnicode_Check(upperObject[i])) {
-                    NamedObject *nobjUpper = runtime_->getObject(std::string(PyUnicode_AsUTF8(upperObject[i])));
-                    upper[i] = nobjUpper->_localArray();
-                } else
-                    upper[i] = bsp_convertObject(upperObject[i], "");
-            }
-            IndexSet *result = new IndexSetRegionTensor(n,lower,upper);
-            for (unsigned i = 0; i < n; ++i) {
-                if (!PyUnicode_Check(lowerObject[i]))
-                    delete lower[i];
-                if (!PyUnicode_Check(upperObject[i]))
-                    delete upper[i];
-            }
-            return result;
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            return NULL;
-        }
-    }
-
-    IndexSet *bsp_pointTensor(unsigned n, PyObject **lowerObject) {
-        LocalArray *lower[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        try {
-            for (unsigned i = 0; i < n; ++i) {
-                if (PyUnicode_Check(lowerObject[i])) {
-                    NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject[i])));
-                    lower[i] = nobjLower->_localArray();
-                } else 
-                    lower[i] = bsp_convertObject(lowerObject[i], "");
-            }
-            IndexSet *result = new IndexSetPointTensor(n,lower);
-            for (unsigned i = 0; i < n; ++i) {
-                if (!PyUnicode_Check(lowerObject[i]))
-                    delete lower[i];
-            }
-            return result;
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            return NULL;
-        }
-    }
-
-    IndexSet *bsp_regionSequence(PyObject *lowerObject, PyObject *upperObject) {
-        try {
-            LocalArray *lower = NULL;
-            if (PyUnicode_Check(lowerObject)) {
-                NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject)));
-                lower = nobjLower->_localArray();
-            } else
-                lower = bsp_convertObject(lowerObject,"");
-            LocalArray *upper = NULL;
-            if (PyUnicode_Check(upperObject)) {
-                NamedObject *nobjUpper = runtime_->getObject(std::string(PyUnicode_AsUTF8(upperObject)));
-                upper = nobjUpper->_localArray();
-            } else
-                upper = bsp_convertObject(upperObject,"");
-
-            IndexSet *result = new IndexSetRegionSequence(*lower,*upper);
-            if (!PyUnicode_Check(lowerObject))
-                delete lower;
-            if (!PyUnicode_Check(upperObject))
-                delete upper;
-            return result;
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            return NULL;
-        }
-    }
-
-    IndexSet *bsp_pointSequence(PyObject *lowerObject) {
-        try {
-            LocalArray *lower = NULL;
-            if (PyUnicode_Check(lowerObject)) {
-                NamedObject *nobjLower = runtime_->getObject(std::string(PyUnicode_AsUTF8(lowerObject)));
-                lower = nobjLower->_localArray();
-            } else
-                lower = bsp_convertObject(lowerObject,"");
-
-            IndexSet *result = new IndexSetPointSequence(*lower);
-            if (!PyUnicode_Check(lowerObject))
-                delete lower;
-            return result;
-        } catch (const std::exception &e) {
-            bsp_runtimeError(e.what());
-            return NULL;
-        }
-    }
-
-    static PyObject *bsp_createPointSet(PyObject *self, PyObject *args) {
-        PyObject *lowerObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        IndexSet *indexSet = NULL;
-        if (PyArg_ParseTuple(args, "O|OOOOOO:bsp.createPointSet",
-                    lowerObject+0,
-                    lowerObject+1,
-                    lowerObject+2,
-                    lowerObject+3,
-                    lowerObject+4,
-                    lowerObject+5,
-                    lowerObject+6
-                    )){
-            int n = 0;
-            for (int i = 0; i < 7; ++i) {
-                if (lowerObject[i] == NULL)
-                    break;
-                Py_XINCREF(lowerObject[i]);
-                ++n;
-            }
-            if (n > 1) {
-                indexSet = bsp_pointTensor(n,lowerObject);
-            } else {
-                indexSet = bsp_pointSequence(lowerObject[0]);
-            }
-            for (int i = 0; i < n; ++i) {
-                Py_XDECREF(lowerObject[i]);
-            }
-        } else {
-            bsp_typeError("invalid arguments for bsp.createPointSet");
-            Py_RETURN_NONE;
-        }
-        int i = 0;
-        while (idToIndexSet_.find(i) != idToIndexSet_.end())
-            ++i;
-        idToIndexSet_[i] = indexSet;
-        indexSetToID_[indexSet] = i;
-        return PyRetVal(Py_BuildValue("i",i));
-    }
-
-    static PyObject *bsp_createRegionSet(PyObject *self, PyObject *args) {
-        PyObject *lowerObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        PyObject *upperObject[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
-        IndexSet *indexSet = NULL;
-        if (PyArg_ParseTuple(args, "(OO)|(OO)(OO)(OO)(OO)(OO)(OO):bsp.createRegionSet",
-                    lowerObject+0,upperObject+0,
-                    lowerObject+1,upperObject+1,
-                    lowerObject+2,upperObject+2,
-                    lowerObject+3,upperObject+3,
-                    lowerObject+4,upperObject+4,
-                    lowerObject+5,upperObject+5,
-                    lowerObject+6,upperObject+6)) {
-            int n = 0;
-            for (int i = 0; i < 7; ++i) {
-                if (lowerObject[i] == NULL)
-                    break;
-                Py_XINCREF(lowerObject[i]);
-                Py_XINCREF(upperObject[i]);
-                ++n;
-            }
-            if (n > 1) {
-                indexSet = bsp_regionTensor(n,lowerObject,upperObject);
-            } else {
-                indexSet = bsp_regionSequence(lowerObject[0],upperObject[0]);
-            }
-            for (int i = 0; i < n; ++i) {
-                Py_XDECREF(lowerObject[i]);
-                Py_XDECREF(upperObject[i]);
-            }
-        } else {
-            bsp_typeError("invalid arguments for bsp.createRegionSet");
-            Py_RETURN_NONE;
-        }
-        int i = 0;
-        while (idToIndexSet_.find(i) != idToIndexSet_.end())
-            ++i;
-        idToIndexSet_[i] = indexSet;
-        indexSetToID_[indexSet] = i;
-        return PyRetVal(Py_BuildValue("i",i));
-    }
-
-    // indexCount = bsp.indexCount(indexSet)
-    static PyObject *bsp_indexCount(PyObject *self, PyObject *args) {
-        int i = 0;
-        int ok = PyArg_ParseTuple(args, "i:bsp.indexCount",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.indexCount(indexSet)");
-            return PyRetVal(Py_BuildValue("i",-1));
-        }
-        try {
-            PyObject *retval = NULL;
-            if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                if (indexSet)
-                    retval = Py_BuildValue("i",indexSet->getNumberOfIndices());
-                else
-                    retval = Py_BuildValue("i",0);
-            } else 
-                retval = Py_BuildValue("i",0);
-            return PyRetVal(retval);
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            return PyRetVal(Py_BuildValue("i",-1));
-        }
-    }
-
-    // regionCount = bsp.regionCount(indexSet)
-    static PyObject *bsp_regionCount(PyObject *self, PyObject *args) {
-        int i = 0;
-        int ok = PyArg_ParseTuple(args, "i:bsp.regionCount",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.regionCount(indexSet)");
-            return PyRetVal(Py_BuildValue("i",-1));
-        }
-        try {
-            PyObject *retval = NULL;
-            if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                if (indexSet)
-                    retval = Py_BuildValue("i",indexSet->getNumberOfRegions());
-                else
-                    retval =  Py_BuildValue("i",0);
-            } else 
-                retval = Py_BuildValue("i",0);
-            return PyRetVal(retval);
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            return PyRetVal(Py_BuildValue("i",-1));
-        }
-    }
-
-    // OK = bsp.activateIterator(indexSet)
-    static PyObject *bsp_activateIterator(PyObject *self, PyObject *args) {
-        int i = 0;
-        int ok = PyArg_ParseTuple(args, "i:bsp.activateIterator",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.activateIterator(indexSet)");
-            Py_RETURN_FALSE;
-        }
-        try {
-            if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                activeIndexSet_ = indexSet;
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            Py_RETURN_FALSE;
-        }
-        Py_RETURN_TRUE;
-    }
-
-    // OK = bsp.resetIterator(optionalIndexSet)
-    static PyObject *bsp_resetIterator(PyObject *self, PyObject *args) {
-        int i = -1;
-        int ok = PyArg_ParseTuple(args, "|i:bsp.resetIterator",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.resetIterator()");
-            Py_RETURN_FALSE;
-        }
-        try {
-            if (i < 0) {
-                if (NULL != activeIndexSet_)
-                    activeIndexSet_->curr().reset();
-                else {
-                    bsp_runtimeError("no active index set when calling bsp.resetIterator()");
-                    Py_RETURN_FALSE;
-                }
-            } else if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                indexSet->curr().reset();
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            Py_RETURN_FALSE;
-        }
-        Py_RETURN_TRUE;
-    }
-
-    PyObject *bsp_buildIndex(IndexSet *indexSet) {
-        int nDims = indexSet->getNumberOfDimensions();
-        uint64_t index[7];
-        IndexSet::Iterator &iter = indexSet->curr();
-        for (int iDim = 0; iDim < nDims; ++iDim) {
-            index[iDim] = iter.getIndex(iDim);
-        }
-        switch (nDims) {
-            case 1:
-                return PyRetVal(Py_BuildValue("k",(unsigned long)index[0]));
-            case 2:
-                return PyRetVal(Py_BuildValue("(kk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1]
-                        ));
-            case 3:
-                return PyRetVal(Py_BuildValue("(kkk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1],
-                        (unsigned long)index[2]
-                        ));
-            case 4:
-                return PyRetVal(Py_BuildValue("(kkkk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1],
-                        (unsigned long)index[2],
-                        (unsigned long)index[3]
-                        ));
-            case 5:
-                return PyRetVal(Py_BuildValue("(kkkkk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1],
-                        (unsigned long)index[2],
-                        (unsigned long)index[3],
-                        (unsigned long)index[4]
-                        ));
-            case 6:
-                return PyRetVal(Py_BuildValue("(kkkkkk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1],
-                        (unsigned long)index[2],
-                        (unsigned long)index[3],
-                        (unsigned long)index[4],
-                        (unsigned long)index[5]
-                        ));
-            default:
-                return PyRetVal(Py_BuildValue("(kkkkkkk)",
-                        (unsigned long)index[0],
-                        (unsigned long)index[1],
-                        (unsigned long)index[2],
-                        (unsigned long)index[3],
-                        (unsigned long)index[4],
-                        (unsigned long)index[5],
-                        (unsigned long)index[6]
-                        ));
-        }
-    }
-
-    // currIndex = bsp.currentIndex(optionalIndexSet) 
-    static PyObject *bsp_currentIndex(PyObject *self, PyObject *args) {
-        int i = -1;
-        int ok = PyArg_ParseTuple(args, "|i:bsp.currentIndex",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.currentIndex()");
-            Py_RETURN_NONE;
-        }
-        try {
-            if (i < 0) {
-                if (NULL != activeIndexSet_) {
-                    return bsp_buildIndex(activeIndexSet_);
-                }
-                else {
-                    bsp_runtimeError("no active index set when calling bsp.currentIndex()");
-                    Py_RETURN_NONE;
-                }
-            } else if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                return bsp_buildIndex(indexSet);
-            } else {
-                Py_RETURN_NONE;
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            Py_RETURN_NONE;
-        }
-    }
-
-    // nextIndex = bsp.nextIndex(optionalIndexSet)
-    static PyObject *bsp_nextIndex(PyObject *self, PyObject *args) {
-        int i = -1;
-        int ok = PyArg_ParseTuple(args, "|i:bsp.nextIndex",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.nextIndex()");
-            Py_RETURN_NONE;
-        }
-        try {
-            if (i < 0) {
-                if (NULL != activeIndexSet_) {
-                    ++ activeIndexSet_->curr();
-                    if (activeIndexSet_->curr() == activeIndexSet_->end())
-                        Py_RETURN_NONE;
-                    return bsp_buildIndex(activeIndexSet_);
-                }
-                else {
-                    bsp_runtimeError("no active index set when calling bsp.nextIndex()");
-                    Py_RETURN_NONE;
-                }
-            } else if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                ++ indexSet->curr();
-                if (indexSet->curr() == indexSet->end())
-                    Py_RETURN_NONE;
-                return bsp_buildIndex(indexSet);
-            } else {
-                Py_RETURN_NONE;
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            Py_RETURN_NONE;
-        }
-    }
-
-    // indexOfNextRegion = bsp.nextRegion(optionalIndexSet)
-    static PyObject *bsp_nextRegion(PyObject *self, PyObject *args) {
-        int i = -1;
-        int ok = PyArg_ParseTuple(args, "|i:bsp.nextRegion",&i);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.nextRegion()");
-            Py_RETURN_NONE;
-        }
-        Py_RETURN_NONE;
-        try {
-            if (i < 0) {
-                if (NULL != activeIndexSet_) {
-                    activeIndexSet_->curr().nextRegion();
-                    if (activeIndexSet_->curr() == activeIndexSet_->end())
-                        Py_RETURN_NONE;
-                    return bsp_buildIndex(activeIndexSet_);
-                }
-                else {
-                    bsp_runtimeError("no active index set when calling bsp.nextRegion()");
-                    Py_RETURN_NONE;
-                }
-            } else if (idToIndexSet_.find(i) != idToIndexSet_.end()) {
-                IndexSet *indexSet = idToIndexSet_[i];
-                indexSet->curr().nextRegion();
-                if (indexSet->curr() == indexSet->end())
-                    Py_RETURN_NONE;
-                return bsp_buildIndex(indexSet);
-            } else {
-                Py_RETURN_NONE;
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            Py_RETURN_NONE;
-        }
-    }
-
-    // OK = bsp.requestTo(clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)
-    static PyObject *bsp_requestTo(PyObject *self, PyObject *args) {
-        char *clientPath = NULL;
-        char *serverPath = NULL;
-        int indexSetID = -1;
-        long serverProcID = -1;
-        int ok = PyArg_ParseTuple(args, "ssi|l:bsp.requestTo",&clientPath,&serverPath,&indexSetID,&serverProcID);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.requestTo(clientArrayPath,"
-                    "serverArrayPath,indexSet,optionalServerProcID)");
-            return PyRetVal(Py_BuildValue("O",Py_False));
-        }
-        try {
-            LocalArray *clientArray = runtime_->getObject(clientPath)->_localArray();
-            NamedObject *nobjServer = runtime_->getObject(serverPath);
-            if (ARRAY != nobjServer->getType()) {
-                bsp_typeError("invalid serverArrayPath for bsp.requestTo("
-                        "clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                return PyRetVal(Py_BuildValue("O",Py_False));
-            }
-            if (idToIndexSet_.find(indexSetID) == idToIndexSet_.end()) {
-                PyErr_SetString(PyExc_TypeError, "invalid indexSet for bsp.requestTo("
-                        "clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                return PyRetVal(Py_BuildValue("O",Py_False));
-            }
-            if (nobjServer->isGlobal()) {
-                if (serverProcID >= 0) {
-                    bsp_typeError( 
-                            "serverProcID not required for local shared client "
-                            "in bsp.requestTo(clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                    return PyRetVal(Py_BuildValue("O",Py_False));
-                } else {
-                    runtime_->requestFrom(*nobjServer->_globalArray(),
-                            *idToIndexSet_[indexSetID],
-                            *clientArray, bsp_getScriptPos());
-                }
-            } else {
-                if (serverProcID < 0) {
-                    bsp_typeError("serverProcID required for global client"
-                            " in bsp.requestTo(clientArrayPath,serverArrayPath,indexSet,optionalServerProcID)");
-                    return PyRetVal(Py_BuildValue("O",Py_False));
-                } else {
-                    runtime_->requestFrom(*nobjServer->_localArray(), (uint64_t)serverProcID,
-                            *idToIndexSet_[indexSetID],
-                            *clientArray, bsp_getScriptPos());
-                }
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            return PyRetVal(Py_BuildValue("O",Py_False));
-        }
-        return PyRetVal(Py_BuildValue("O",Py_True));
-    }
-
-    // OK = bsp.updateFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)
-    static PyObject *bsp_updateFrom(PyObject *self, PyObject *args) {
-        char *clientPath = NULL;
-        char *serverPath = NULL;
-        char *op = NULL;
-        int indexSetID = -1;
-        long serverProcID = -1;
-        uint16_t opID = LocalArray::OPID_ASSIGN;
-        int ok = PyArg_ParseTuple(args, "sssi|l:bsp.requestTo",&clientPath,&op,&serverPath,&indexSetID,&serverProcID);
-        if (!ok) {
-            bsp_typeError("invalid arguments for bsp.requestFrom(clientArrayPath,op,"
-                    "serverArrayPath,indexSet,optionalServerProcID)");
-            return PyRetVal(Py_BuildValue("O",Py_False));
-        }
-        try {
-            LocalArray *clientArray = runtime_->getObject(clientPath)->_localArray();
-            NamedObject *nobjServer = runtime_->getObject(serverPath);
-            if (ARRAY != nobjServer->getType()) {
-                bsp_typeError("invalid serverArrayPath for bsp.requestFrom("
-                        "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return PyRetVal(Py_BuildValue("O",Py_False));
-            }
-            if (0 == strcmp(op, "="))
-                opID = LocalArray::OPID_ASSIGN;
-            else if (0 == strcmp(op, "+") || 0 == strcmp(op, "+="))
-                opID = LocalArray::OPID_ADD;
-            else if (0 == strcmp(op, "*") || 0 == strcmp(op, "*="))
-                opID = LocalArray::OPID_MUL;
-            else if (0 == strcmp(op, "&") || 0 == strcmp(op, "&="))
-                opID = LocalArray::OPID_AND;
-            else if (0 == strcmp(op, "|") || 0 == strcmp(op, "|="))
-                opID = LocalArray::OPID_OR;
-            else if (0 == strcmp(op, "^") || 0 == strcmp(op, "^="))
-                opID = LocalArray::OPID_XOR;
-            else if (0 == strcmp(op, "min") || 0 == strcmp(op, "min="))
-                opID = LocalArray::OPID_MIN;
-            else if (0 == strcmp(op, "max") || 0 == strcmp(op, "max="))
-                opID = LocalArray::OPID_MAX;
-            else {
-                bsp_typeError("unrecognized op for bsp.requestFrom("
-                        "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return PyRetVal(Py_BuildValue("O",Py_False));
-            }
-            if (idToIndexSet_.find(indexSetID) == idToIndexSet_.end()) {
-                PyErr_SetString(PyExc_TypeError, "invalid indexSet for bsp.requestFrom("
-                        "clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                return PyRetVal(Py_BuildValue("O",Py_False));
-            }
-            if (nobjServer->isGlobal()) {
-                if (serverProcID >= 0) {
-                    bsp_typeError( 
-                            "serverProcID not required for local shared client "
-                            "in bsp.requestFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                    return PyRetVal(Py_BuildValue("O",Py_False));
-                } else {
-                    runtime_->requestTo(*nobjServer->_globalArray(),
-                            *idToIndexSet_[indexSetID],
-                            *clientArray, opID, bsp_getScriptPos());
-                }
-            } else {
-                if (serverProcID < 0) {
-                    bsp_typeError("serverProcID required for global client"
-                            " in bsp.requestFrom(clientArrayPath,op,serverArrayPath,indexSet,optionalServerProcID)");
-                    return PyRetVal(Py_BuildValue("O",Py_False));
-                } else {
-                    runtime_->requestTo(*nobjServer->_localArray(), (uint64_t)serverProcID,
-                            *idToIndexSet_[indexSetID],
-                            *clientArray, opID, bsp_getScriptPos());
-                }
-            }
-        } catch (const std::exception& e) {
-            bsp_runtimeError(e.what());
-            return PyRetVal(Py_BuildValue("O",Py_False));
-        }
-        return PyRetVal(Py_BuildValue("O",Py_True));
-    }
-
     // OK = bsp.toProc(procID,up-to-10-local-arrays)
     static PyObject *bsp_toProc(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         unsigned long procID = 0;
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "ks|sssssssss:bsp.toProc",
@@ -1311,6 +1388,7 @@ extern "C" {
 
     // OK = bsp.sync(tag,optionalSendMatrix)
     static PyObject *bsp_sync(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *tag = NULL;
         PyObject *objSendMatrix = NULL;
         int ok = PyArg_ParseTuple(args, "s|O:bsp.sync", &tag, &objSendMatrix);
@@ -1383,7 +1461,13 @@ extern "C" {
                         bsp_extractImported(iter->second,"",fromProc_[iProc]);
                 }
             }
-            
+
+            // clear updates
+            for (std::map<std::string, PyObject *>::iterator iter = futures_.begin();
+                    iter != futures_.end(); ++ iter) {
+                Future_clearUpdates(iter->second);
+            }
+
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             return PyRetVal(Py_BuildValue("O",Py_False));
@@ -1393,6 +1477,7 @@ extern "C" {
 
     // {partnerID1, ..., partnerIDk} = bsp.async(tag, optionalStopping)
     static PyObject *bsp_async(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *tag = NULL;
         PyObject *option = NULL;
         bool stopping = false;
@@ -1430,7 +1515,12 @@ extern "C" {
                         bsp_extractImported(iter->second,"",fromProc_[iProc]);
                 }
             }
-            
+
+            // clear updates
+            for (std::map<std::string, PyObject *>::iterator iter = futures_.begin();
+                    iter != futures_.end(); ++ iter) {
+                Future_clearUpdates(iter->second);
+            }
         } catch (const std::exception &e) {
             bsp_runtimeError(e.what());
             Py_RETURN_NONE;
@@ -1447,6 +1537,7 @@ extern "C" {
 
     // bsp.addWorker(procID)
     static PyObject *bsp_addWorker(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         unsigned int procID = runtime_->getMyProcessID();
         int ok = PyArg_ParseTuple(args, "I:bsp.addWorker", &procID);
         if (!ok) {
@@ -1463,6 +1554,7 @@ extern "C" {
 
     // bsp.setScheduler(boundOfDelay, smallestBatch, largestBatch)
     static PyObject *bsp_setScheduler(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         unsigned int boundOfDelay = 0, smallestBatch = 0, largestBatch = 0;
         int ok = PyArg_ParseTuple(args, "I|II:bsp.setScheduler", &boundOfDelay, &smallestBatch, &largestBatch);
         if (!ok) {
@@ -1479,6 +1571,7 @@ extern "C" {
 
     // bsp.unsetScheduler()
     static PyObject *bsp_unsetScheduler(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         try {
             runtime_->unsetScheduler();
         } catch (const std::exception & e) {
@@ -1489,6 +1582,7 @@ extern "C" {
 
     // bsp.enableScheduler()
     static PyObject *bsp_enableScheduler(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         try {
             runtime_->enableScheduler();
         } catch (const std::exception & e) {
@@ -1499,6 +1593,7 @@ extern "C" {
 
     // bsp.disableScheduler()
     static PyObject *bsp_disableScheduler(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         try {
             runtime_->disableScheduler();
         } catch (const std::exception & e) {
@@ -1509,18 +1604,21 @@ extern "C" {
 
     // bsp.toggleVerbose()
     static PyObject *bsp_toggleVerbose(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
 	runtime_->setVerbose(!runtime_->isVerbose());
 	Py_RETURN_NONE;
     }
 
     // bsp.tic()
     static PyObject *bsp_tic(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         gettimeofday(&tvStart_, NULL);
 	Py_RETURN_NONE;
     }
 
     // bsp.toc()
     static PyObject *bsp_toc(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         gettimeofday(&tvStop_, NULL);
         double result = tvStop_.tv_sec - tvStart_.tv_sec + 1e-6 * (tvStop_.tv_usec - tvStart_.tv_usec);
         return PyRetVal(Py_BuildValue("d",result));
@@ -1528,6 +1626,7 @@ extern "C" {
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
@@ -1774,6 +1873,7 @@ extern "C" {
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
@@ -2024,6 +2124,7 @@ extern "C" {
     }
 
     static PyObject *bsp_concensus(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"nParamsPerWorker", "nWorkers", "params", "multipliers", "center", "centerLevel", "proximityLevel", NULL};
         PyObject *objCoParams = NULL, *objCoMultipliers = NULL, *objParam = NULL;
         unsigned long nParamsPerWorker = 0, nWorkers = 0;
@@ -2139,6 +2240,7 @@ extern "C" {
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
     static PyObject *bsp_findFreqSet(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"sequence", "fileName", "threshold", "tmpl2", "tmpl3", "multiThread", NULL};
         PyObject *objSeq = NULL;
         char *strFileName = NULL;
@@ -2197,6 +2299,7 @@ extern "C" {
     }
 
     static PyObject *bsp_getFreq(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"freq", "be", "sequence", "fileName", NULL};
         PyObject *objSeq = NULL, *objFreq = NULL, *objBE = NULL;
         char *strFileName = NULL;
@@ -2291,6 +2394,7 @@ extern "C" {
     }
 
     static PyObject *bsp_getFreqIndex(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
         static const char * kwlist[] = {"result", "sequence", "fileName", "tmpl2", "tmpl3", "start", NULL};
         PyObject *objSeq = NULL, *objResult = NULL;
         char *strFileName = NULL;
@@ -2368,6 +2472,7 @@ extern "C" {
     }
 
     static PyObject *bsp_mostFrequent(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *fileName = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.mostFrequent", &fileName);
         if (!ok) {
@@ -2384,6 +2489,7 @@ extern "C" {
     }
 
     static PyObject *bsp_wordFreq(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
         char *fileName = NULL;
         int wi = 0;
         int ok = PyArg_ParseTuple(args, "si:bsp.wordFreq", &fileName, &wi);
@@ -2396,6 +2502,7 @@ extern "C" {
         return PyRetVal(Py_BuildValue("k", apriori.freq((unsigned short)wi)));
     }
 
+
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
         {"procCount",bsp_procCount,METH_VARARGS,"get the number of processes"},
@@ -2406,22 +2513,11 @@ extern "C" {
         {"toObject",bsp_toObject,METH_VARARGS,"build an object from a local array"},
         {"toNumpy",bsp_toNumpy,METH_VARARGS,"build a numpy array from a local aray"},
         {"asNumpy",bsp_asNumpy,METH_VARARGS,"open a view of numpy array for accessing a local array"},
-        {"createArray",bsp_createArray,METH_VARARGS,"create a new local array"},
+        {"array",(PyCFunction)bsp_array,METH_VARARGS | METH_KEYWORDS,"create a new local array"},
         {"delete",bsp_delete,METH_VARARGS,"delete a local array or a path"},
         {"share",bsp_share,METH_VARARGS,"share local arrays"},
         {"globalize",bsp_globalize,METH_VARARGS,"globalize local arrays"},
         {"privatize",bsp_privatize,METH_VARARGS,"privatize share/global arrays"},
-        {"createRegionSet",bsp_createRegionSet,METH_VARARGS,"create an region index-set"},
-        {"createPointSet",bsp_createPointSet,METH_VARARGS,"create an Point index-set"},
-        {"indexCount",bsp_indexCount,METH_VARARGS,"get the count of indices in an index set"},
-        {"regionCount",bsp_regionCount,METH_VARARGS,"get the count of regions in an index set"},
-        {"resetIterator",bsp_resetIterator,METH_VARARGS,"reset the iterator of an index set"},
-        {"activateIterator",bsp_activateIterator,METH_VARARGS,"activate the iterator of an index set"},
-        {"currentIndex",bsp_currentIndex,METH_VARARGS,"get current index of an index set"},
-        {"nextIndex",bsp_nextIndex,METH_VARARGS,"get next index of an index set"},
-        {"nextRegion",bsp_nextRegion,METH_VARARGS,"get the first index of next region in an index set"},
-        {"requestTo",bsp_requestTo,METH_VARARGS,"request data from a share/global array to a local array"},
-        {"updateFrom",bsp_updateFrom,METH_VARARGS,"update data from a local array to a share/global array"},
         {"sync",bsp_sync,METH_VARARGS,"sync data with optional send-matrix"},
 	{"async", bsp_async, METH_VARARGS,"asynchronization"},
         {"addWorker", bsp_addWorker, METH_VARARGS, "add a worker for asynchronization"},
@@ -2504,7 +2600,27 @@ extern "C" {
         traceback_extractStack_ = PyObject_GetAttrString(traceback_, "extract_stack");
         Py_XINCREF(traceback_extractStack_);
 
-        PyImport_ImportModule("bsp");
+        PyObject *module = PyImport_ImportModule("bsp");
+
+        PyObject *classDict = PyDict_New();
+        int iMethod = 0;
+        while (FutureMethods[iMethod].ml_name) {
+            PyObject *closure = PyCFunction_New(FutureMethods + iMethod, NULL);
+            PyObject *method = PyInstanceMethod_New(closure);
+            PyDict_SetItemString(classDict, FutureMethods[iMethod].ml_name, method);
+            Py_CLEAR(closure);
+            Py_CLEAR(method);
+            ++ iMethod;
+        }
+        PyObject *classBase = PyTuple_New(0);
+        PyObject *className = PyUnicode_FromString("Future");
+        PyObject *futureClass = PyObject_CallFunctionObjArgs((PyObject *) &PyType_Type, className, classBase, classDict, NULL);
+
+        PyObject *moduleDict = PyModule_GetDict(module);
+        PyDict_SetItemString(moduleDict, "Future", futureClass);
+        Py_CLEAR(classDict);
+        Py_CLEAR(className);
+        Py_CLEAR(futureClass);
 
     }
 

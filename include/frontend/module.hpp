@@ -1,6 +1,5 @@
 #ifndef __PCF_PY_MODULE_HPP__
 #define __PCF_PY_MODULE_HPP__
-
 extern "C" {
 #include <Python.h>
 }

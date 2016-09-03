@@ -19,12 +19,18 @@ class IndexSetRegionTensor: public BSP::IndexSet {
 public:
 	IndexSetRegionTensor(const unsigned numberOfDimensions,
 			LocalArray **lowerComponentAlongDim,
-			LocalArray **upperComponentAlongDim);
+			LocalArray **upperComponentAlongDim,
+                        LocalArray **stepAlongDim = NULL);
+        IndexSetRegionTensor(LocalArray &localArray);
+        IndexSetRegionTensor(unsigned int nDims, uint64_t *start, uint64_t *stop, int32_t *step);
 	virtual ~IndexSetRegionTensor();
 protected:
 	uint64_t computeNumberOfIndices(const unsigned numberOfDimensions,
 			LocalArray **lowerComponentAlongDim,
-			LocalArray **upperComponentAlongDim);
+			LocalArray **upperComponentAlongDim,
+                        LocalArray **stepAlongDim);
+        uint64_t computeNumberOfIndices(LocalArray& localArray);
+        uint64_t computeNumberOfIndices(unsigned int nDims, uint64_t *start, uint64_t *stop, int32_t *step);
 	virtual void initConstantIterators();
 	virtual void updateComponentBoundsOfIterator(Iterator *iterator);
 	virtual void getIndex(Iterator &iterator);
@@ -32,6 +38,7 @@ private:
 	uint64_t _numberOfComponentsAlongDim[7];
 	uint64_t *_lowerComponentAlongDim[7];
 	uint64_t *_upperComponentAlongDim[7];
+        int32_t *_stepAlongDim[7];
 };
 
 } /* namespace BSP */

@@ -1782,13 +1782,21 @@ void LocalArray::getElementsRegionTensor(const uint64_t *index, char *output) {
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
         n[iDim] = index[iDim + 1];
         component[iDim] = index + prefix;
-        prefix += n[iDim] * 2;
+        prefix += n[iDim] * 3;
         outerPosition[iDim] = 0;
         for (uint64_t iComponent = 0; iComponent < n[iDim]; iComponent++) {
-            uint64_t end = component[iDim][iComponent << 1]
-                    + component[iDim][(iComponent << 1) + 1];
-            if (end > _numberOfElementsAlongDimension[iDim])
+            uint64_t begin = component[iDim][(iComponent << 1) + iComponent]; 
+            uint64_t width = component[iDim][(iComponent << 1) + iComponent + 1];
+            int32_t step = component[iDim][(iComponent << 1) + iComponent + 2];
+            if (step == 0)
                 throw EInvalidArgument();
+            else if (step > 0) {
+                if (begin + step * (width - 1) > _numberOfElementsAlongDimension[iDim])
+                    throw EInvalidArgument();
+            } else {
+                if (begin < -step * (width - 1) || begin > _numberOfElementsAlongDimension[iDim])
+                    throw EInvalidArgument();
+            }
         }
     }
 
@@ -1796,12 +1804,15 @@ void LocalArray::getElementsRegionTensor(const uint64_t *index, char *output) {
     while (outerPosition[0] < n[0]) {
         // compute the initial offset of this outer position
         uint64_t width[7];
-        uint64_t offset = component[0][outerPosition[0] << 1];
-        width[0] = component[0][1 + (outerPosition[0] << 1)];
+        int32_t step[7];
+        uint64_t offset = component[0][(outerPosition[0] << 1) + outerPosition[0]];
+        width[0] = component[0][1 + (outerPosition[0] << 1) + outerPosition[0]];
+        step[0] = component[0][2 + (outerPosition[0] << 1) + outerPosition[0]];
         for (unsigned iDim = 1; iDim < _numberOfDimensions; iDim++) {
             offset *= _numberOfElementsAlongDimension[iDim];
-            offset += component[iDim][outerPosition[iDim] << 1];
-            width[iDim] = component[iDim][1 + (outerPosition[iDim] << 1)];
+            offset += component[iDim][(outerPosition[iDim] << 1) + outerPosition[iDim]];
+            width[iDim] = component[iDim][1 + (outerPosition[iDim] << 1) + outerPosition[iDim]];
+            step[iDim] = (int32_t)component[iDim][2 + (outerPosition[iDim] << 1) + outerPosition[iDim]];
         }
 
         // iterate through the inner positions
@@ -1809,10 +1820,10 @@ void LocalArray::getElementsRegionTensor(const uint64_t *index, char *output) {
             innerPosition[iDim] = 0;
         while (innerPosition[0] < width[0]) {
             // compute the element offset increment
-            uint64_t deltaOffset = innerPosition[0];
+            int64_t deltaOffset = innerPosition[0] * step[0];
             for (unsigned iDim = 1; iDim < _numberOfDimensions; iDim++) {
                 deltaOffset *= _numberOfElementsAlongDimension[iDim];
-                deltaOffset += innerPosition[iDim];
+                deltaOffset += innerPosition[iDim] * step[iDim];
             }
 
             // copy the data
@@ -2908,13 +2919,21 @@ void LocalArray::setElementsRegionTensor(const uint64_t *index,
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
         n[iDim] = index[iDim + 1];
         component[iDim] = index + prefix;
-        prefix += n[iDim] * 2;
+        prefix += n[iDim] * 3;
         outerPosition[iDim] = 0;
         for (uint64_t iComponent = 0; iComponent < n[iDim]; iComponent++) {
-            uint64_t end = component[iDim][iComponent << 1]
-                    + component[iDim][(iComponent << 1) + 1];
-            if (end > _numberOfElementsAlongDimension[iDim])
+            uint64_t begin = component[iDim][(iComponent << 1) + iComponent]; 
+            uint64_t width = component[iDim][(iComponent << 1) + iComponent + 1];
+            int32_t step = component[iDim][(iComponent << 1) + iComponent + 2];
+            if (step == 0)
                 throw EInvalidArgument();
+            else if (step > 0) {
+                if (begin + step * (width - 1) > _numberOfElementsAlongDimension[iDim])
+                    throw EInvalidArgument();
+            } else {
+                if (begin < -step * (width - 1) || begin > _numberOfElementsAlongDimension[iDim])
+                    throw EInvalidArgument();
+            }
         }
     }
 
@@ -2922,12 +2941,15 @@ void LocalArray::setElementsRegionTensor(const uint64_t *index,
     while (outerPosition[0] < n[0]) {
         // compute the initial offset of this outer position
         uint64_t width[7];
-        uint64_t offset = component[0][outerPosition[0] << 1];
-        width[0] = component[0][1 + (outerPosition[0] << 1)];
+        int32_t step[7];
+        uint64_t offset = component[0][(outerPosition[0] << 1) + outerPosition[0]];
+        width[0] = component[0][1 + (outerPosition[0] << 1) + outerPosition[0]];
+        step[0] = component[0][2 + (outerPosition[0] << 1) + outerPosition[0]];
         for (unsigned iDim = 1; iDim < _numberOfDimensions; iDim++) {
             offset *= _numberOfElementsAlongDimension[iDim];
-            offset += component[iDim][outerPosition[iDim] << 1];
-            width[iDim] = component[iDim][1 + (outerPosition[iDim] << 1)];
+            offset += component[iDim][(outerPosition[iDim] << 1) + outerPosition[iDim]];
+            width[iDim] = component[iDim][1 + (outerPosition[iDim] << 1) + outerPosition[iDim]];
+            step[iDim] = (int32_t)component[iDim][2 + (outerPosition[iDim] << 1) + outerPosition[iDim]];
         }
 
         // iterate through the inner positions
@@ -2935,10 +2957,10 @@ void LocalArray::setElementsRegionTensor(const uint64_t *index,
             innerPosition[iDim] = 0;
         while (innerPosition[0] < width[0]) {
             // compute the element offset increment
-            uint64_t deltaOffset = innerPosition[0];
+            int64_t deltaOffset = innerPosition[0] * step[0];
             for (unsigned iDim = 1; iDim < _numberOfDimensions; iDim++) {
                 deltaOffset *= _numberOfElementsAlongDimension[iDim];
-                deltaOffset += innerPosition[iDim];
+                deltaOffset += innerPosition[iDim] * step[iDim];
             }
 
             // copy the data

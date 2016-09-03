@@ -41,6 +41,7 @@ GlobalRequestRegion(partition) {
                     - getNode(iDim, lowerPosition);
             _upperOffsetInOwnerAlongDim[iDim][iRequest] = currentUpper[iDim]
                     - getNode(iDim, upperPosition);
+            _stepAlongDim[iDim][iRequest] = 1;
             combination[iDim] = lowerPosition;
         }
         currentLower += _numberOfDimensions;

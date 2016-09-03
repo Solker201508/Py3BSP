@@ -24,6 +24,7 @@ protected:
 	uint64_t _nComponentsAlongDim[7];
 	uint64_t *_lowerIndexAlongDim[7];
 	uint64_t *_upperIndexAlongDim[7];
+        int32_t *_stepAlongDim[7];
 };
 
 } /* namespace BSP */

@@ -1,6 +1,8 @@
 #include "module.hpp"
 #include <iostream>
+#include <cstdio>
 
+void bsp_runtimeError(std::string strErr);
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s PYTHON_SCRIPT\n", argv[0]);
@@ -13,12 +15,12 @@ int main(int argc, char **argv) {
     }
 
     initBSP(&argc, &argv);
-    int err = PyRun_SimpleFileEx(pyScript,argv[1],1);
+    int err = PyRun_SimpleFile(pyScript,argv[1]);
     if (err) {
-        fprintf(stderr, "ERROR: failed to run python script '%s'\n",
-                argv[1]);
+        bsp_runtimeError("unexpected runtime error");
         return -3;
     }
+    fclose(pyScript);
     finiBSP();
     return 0;
 }

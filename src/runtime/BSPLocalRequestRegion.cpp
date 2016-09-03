@@ -37,8 +37,10 @@ void LocalRequestRegion::allocateComponents() {
             throw EInvalidArgument();
         _lowerIndexAlongDim[iDim] = new uint64_t[_nComponentsAlongDim[iDim]];
         _upperIndexAlongDim[iDim] = new uint64_t[_nComponentsAlongDim[iDim]];
+        _stepAlongDim[iDim] = new int32_t[_nComponentsAlongDim[iDim]];
         if (_lowerIndexAlongDim[iDim] == NULL
-                || _upperIndexAlongDim[iDim] == NULL)
+                || _upperIndexAlongDim[iDim] == NULL
+                || _stepAlongDim[iDim] == NULL)
             throw ENotEnoughMemory();
     }
 }

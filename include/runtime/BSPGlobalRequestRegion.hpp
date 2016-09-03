@@ -25,6 +25,7 @@ protected:
 	uint64_t *_upperOwnerPositionAlongDim[7];
 	uint64_t *_lowerOffsetInOwnerAlongDim[7];
 	uint64_t *_upperOffsetInOwnerAlongDim[7];
+        int32_t *_stepAlongDim[7];
 };
 
 } /* namespace BSP */
