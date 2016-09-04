@@ -26,7 +26,7 @@ LocalRequestRegion(shape) {
     allocateComponents();
     allocate(indexLength);
 
-    // fill in the _indexList, _lowerIndexList, _upperIndexList
+    // fill in the _indexList, _lowerIndexList, _upperIndexList, _stepList
     uint64_t dstOffset = _numberOfDimensions + 1;
     _indexList[0] = _dataCount * _numberOfBytesPerElement;
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {

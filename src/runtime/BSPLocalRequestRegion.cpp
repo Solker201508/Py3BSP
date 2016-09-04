@@ -16,6 +16,7 @@ LocalRequest(shape) {
         _nComponentsAlongDim[iDim] = 0;
         _lowerIndexAlongDim[iDim] = NULL;
         _upperIndexAlongDim[iDim] = NULL;
+        _stepAlongDim[iDim] = NULL;
     }
 }
 
@@ -25,6 +26,7 @@ LocalRequestRegion::~LocalRequestRegion() {
             continue;
         delete[] _lowerIndexAlongDim[iDim];
         delete[] _upperIndexAlongDim[iDim];
+        delete[] _stepAlongDim[iDim];
     }
 }
 
@@ -51,8 +53,9 @@ uint64_t LocalRequestRegion::getRegionWidth(const unsigned iDim,
         throw EInvalidArgument();
     if (iComponent >= _nComponentsAlongDim[iDim])
         throw EInvalidArgument();
-    return _upperIndexAlongDim[iDim][iComponent]
-            - _lowerIndexAlongDim[iDim][iComponent] + 1;
+    return ((int64_t)_upperIndexAlongDim[iDim][iComponent]
+            - (int64_t)_lowerIndexAlongDim[iDim][iComponent]) 
+        / _stepAlongDim[iDim][iComponent] + 1;
 }
 
 

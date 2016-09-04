@@ -235,6 +235,7 @@ uint64_t EInvalidElementPosition::getValueOfVar(unsigned iDim) const {
     return _valueOfVar[iDim];
 }
 
+char EInvalidRegionDescriptor::_errorString[1024];
 EInvalidRegionDescriptor::EInvalidRegionDescriptor(
         unsigned iDim, uint64_t iRegion, int64_t begin, int64_t end, int32_t step) {
     _iDim = iDim;
@@ -242,6 +243,8 @@ EInvalidRegionDescriptor::EInvalidRegionDescriptor(
     _begin = begin;
     _end = end;
     _step = step;
+    sprintf(_errorString, "invalid region descriptor, iDim = %u, iRegion = %llu, begin = %lld, end = %lld, step = %d",
+            iDim, iRegion, begin, end, step);
 }
 
 unsigned EInvalidRegionDescriptor::getIDim() const {
@@ -261,7 +264,7 @@ uint64_t EInvalidRegionDescriptor::getIRegion() const {
 }
 
 const char *EInvalidRegionDescriptor::what() const throw () {
-    return "Invalid region descriptor";
+    return _errorString;
 }
 
 EClientArrayTooSmall::EClientArrayTooSmall(std::string requestID,

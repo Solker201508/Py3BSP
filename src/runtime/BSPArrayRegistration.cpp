@@ -262,6 +262,13 @@ void ArrayRegistration::sendRequestsAndUpdates(uint64_t procID) {
             continue;
         runtime->send(_outgoingRequestsAndUpdates[i]->getByteCount(),
                 _outgoingRequestsAndUpdates[i]->getData());
+        if (runtime->isVerbose()) {
+            std::cout << runtime->getMyProcessID() << "," << procID << ": send " << _outgoingRequestsAndUpdates[i]->getByteCount() << " bytes " << std::endl;
+            if (_outgoingRequestsAndUpdates[i]->getByteCount() == 128) {
+                double *myData = (double *)_outgoingRequestsAndUpdates[i]->getData();
+                std::cout << "DATA " << myData[0] << ", " << myData[1] << ", " << myData[2] << ", " << myData[3] << std::endl;
+            }
+        }
     }
 }
 

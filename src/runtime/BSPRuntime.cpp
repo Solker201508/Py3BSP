@@ -395,6 +395,7 @@ void Runtime::requestTo(GlobalArray& server, IndexSet& indexSet,
             != server.getNumberOfBytesPerElement()
             )
         throw EInvalidArgument();
+
     if (client.getElementCount(LocalArray::ALL_DIMS)
             < indexSet.getNumberOfIndices())
         throw EClientArrayTooSmall(requestID,
@@ -406,6 +407,7 @@ void Runtime::requestTo(GlobalArray& server, IndexSet& indexSet,
     ArrayRegistration * registration = server.getRegistration();
     IndexSet * pIndexSet = &indexSet;
     GlobalRequest * request = NULL;
+
     if (dynamic_cast<IndexSetPointSequence *> (pIndexSet) != NULL) {
         IndexSetPointSequence *myIndexSet =
                 dynamic_cast<IndexSetPointSequence *> (pIndexSet);
@@ -427,6 +429,7 @@ void Runtime::requestTo(GlobalArray& server, IndexSet& indexSet,
         request = new GlobalRequestRegionTensor(server, *myIndexSet, requestID);
         messageType = Message::MESSAGE_SET_REGION_TENSOR;
     }
+
     uint16_t clientID = ArrayRegistration::MAX_ACCESS_ID + 1;
     if (client.getRegistration() != NULL)
         clientID = client.getRegistration()->getAccessID();
@@ -443,7 +446,6 @@ void Runtime::requestTo(GlobalArray& server, IndexSet& indexSet,
             procID++) {
         uint64_t indexLength = request->getIndexLength(procID);
         if (indexLength == 0)
-
             continue;
 
         Message * requestMessage = new Message(_myProcID, procID, messageType,
@@ -831,6 +833,10 @@ std::vector<Message*> Runtime::exchangeRequestsAndUpdates(
         for (size_t i = 0; i < nOutgoingUserDefined; i++) {
             send(_outgoingUserDefinedMessages[partnerID][i]->getByteCount(),
                     _outgoingUserDefinedMessages[partnerID][i]->getData());
+            if (_verbose) {
+                std::cout << _myProcID << "," << partnerID << ": send " 
+                    << _outgoingUserDefinedMessages[partnerID][i]->getByteCount() << " bytes" << std::endl;
+            }
         }
     }
     std::vector<Message*> partnerMessages;
@@ -845,6 +851,9 @@ std::vector<Message*> Runtime::exchangeRequestsAndUpdates(
             throw ENotEnoughMemory();
         partnerMessages.push_back(message);
         receive(messageLength, messageData);
+        if (_verbose) {
+            std::cout << _myProcID << "," << partnerID << ": receive " << messageLength << " bytes" << std::endl;
+        }
     }
     exchangeWith(partnerID);
 

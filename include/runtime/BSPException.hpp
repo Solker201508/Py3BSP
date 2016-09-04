@@ -199,6 +199,7 @@ namespace BSP {
         int64_t _begin;
         int64_t _end;
         int32_t _step;
+        static char _errorString[1024];
     };
 
     class EClientArrayTooSmall : public std::exception {

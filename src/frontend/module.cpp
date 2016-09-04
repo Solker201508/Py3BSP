@@ -22,6 +22,7 @@ PyObject *ctypes_addressof_ = NULL;
 PyObject *traceback_ = NULL;
 PyObject *traceback_extractStack_ = NULL;
 PyObject **fromProc_ = NULL;
+PyObject *module_ = NULL;
 uint64_t nProcs_ = 0;
 struct timeval tvStart_, tvStop_;
 std::map<std::string, PyObject *> futures_;
@@ -163,6 +164,274 @@ extern "C" {
         }
     }
 
+    static PyObject *Dim_init(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        PyObject *objThis = NULL;
+        unsigned long dimSize = 0;
+        int ok = PyArg_ParseTuple(args, "Ok:Dim.init", &objThis, &dimSize);
+        if (!ok) {
+            bsp_typeError("invalid params for Dim.init");
+            Py_RETURN_NONE;
+        }
+        try {
+            PyObject *objAttr = Py_BuildValue("k",dimSize);
+            PyObject_SetAttrString(objThis, "dimSize", objAttr);
+            Py_CLEAR(objAttr);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *Dim_del(PyObject *self, PyObject *args) {
+        PyObject *objThis = NULL;
+        int ok = PyArg_ParseTuple(args, "O:Dim.del", &objThis);
+        if (!ok) {
+            bsp_typeError("invalid params for Dim.del");
+            Py_RETURN_NONE;
+        }
+        try {
+            PyObject_DelAttrString(objThis, "dimSize");
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    typedef struct{ LocalArray *_upper, *_lower, *_step; } DimItem;
+    PyObject *dimToObject(unsigned long dimSize, PyObject *objIndex) {
+        LocalArray *lower = NULL, *upper = NULL, *stepSize = NULL;
+        Py_ssize_t myStart = 0, myStop = 0, myStep = 0;
+        uint64_t n = 1;
+        if (PyTuple_Check(objIndex)) {
+            n = (uint64_t)PyTuple_GET_SIZE(objIndex);
+            lower = new LocalArray("",ArrayShape::UINT64,ArrayShape::elementSize(ArrayShape::UINT64),
+                    1, &n);
+            upper = new LocalArray("",ArrayShape::UINT64,ArrayShape::elementSize(ArrayShape::UINT64),
+                    1, &n);
+            stepSize = new LocalArray("",ArrayShape::INT32,ArrayShape::elementSize(ArrayShape::INT32),
+                    1, &n);
+            uint64_t *start = (uint64_t *)lower->getData();
+            uint64_t *stop = (uint64_t *)upper->getData();
+            int32_t *step = (int32_t *)stepSize->getData();
+            for (Py_ssize_t i = 0; i < n; ++ i) {
+                PyObject *objComponent = PyTuple_GetItem(objIndex, i);
+                if (!PySlice_Check(objComponent)) {
+                    bsp_typeError("only slice indices are supported");
+                    Py_RETURN_NONE;
+                }
+                PySlice_GetIndices(objComponent, dimSize, &myStart, &myStop, &myStep);
+                start[i] = myStart;
+                stop[i] = myStop;
+                step[i] = myStep;
+            }
+        } else {
+            if (!PySlice_Check(objIndex)) {
+                bsp_typeError("only slice indices are supported");
+                Py_RETURN_NONE;
+            }
+            lower = new LocalArray("",ArrayShape::UINT64,ArrayShape::elementSize(ArrayShape::UINT64),
+                    1, &n);
+            upper = new LocalArray("",ArrayShape::UINT64,ArrayShape::elementSize(ArrayShape::UINT64),
+                    1, &n);
+            stepSize = new LocalArray("",ArrayShape::INT32,ArrayShape::elementSize(ArrayShape::INT32),
+                    1, &n);
+            uint64_t *start = (uint64_t *)lower->getData();
+            uint64_t *stop = (uint64_t *)upper->getData();
+            int32_t *step = (int32_t *)stepSize->getData();
+            PySlice_GetIndices(objIndex, dimSize, &myStart, &myStop, &myStep);
+            start[0] = myStart;
+            stop[0] = myStop;
+            step[0] = myStep;
+        }
+
+        uint64_t *start = (uint64_t *)lower->getData();
+        uint64_t *stop = (uint64_t *)upper->getData();
+        for (unsigned int i = 0; i < (unsigned int)n; ++ i) {
+            if (start[i] >= dimSize || stop[i] > dimSize) {
+                bsp_typeError("out-of-range index");
+                Py_RETURN_NONE;
+            }
+        }
+
+        DimItem *item = new DimItem;
+        item->_lower = lower;
+        item->_upper = upper;
+        item->_step = stepSize;
+        return PyRetVal(PyLong_FromSize_t((size_t)item));
+    }
+
+    static PyObject *Dim_getItem(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        PyObject *objSelf = NULL, *objIndex = NULL;
+        int ok = PyArg_ParseTuple(args, "OO", &objSelf, &objIndex);
+        if (!ok) {
+            bsp_typeError("invalid index");
+            Py_RETURN_NONE;
+        }
+        PyObject *objDimSize = PyObject_GetAttrString(objSelf, "dimSize");
+        if (NULL == objDimSize) {
+            bsp_runtimeError("dim object has no dimSize");
+            Py_RETURN_NONE;
+        }
+        unsigned long dimSize = 0;
+        ok = PyArg_Parse(objDimSize, "k", &dimSize);
+        if (!ok) {
+            bsp_runtimeError("invalid dimSize");
+            Py_RETURN_NONE;
+        }
+        return dimToObject(dimSize, objIndex);
+    }
+
+    static PyMethodDef DimMethods[] = {
+        {"__init__", Dim_init, METH_VARARGS,  "init"},
+        {"__del__", Dim_del, METH_VARARGS,  "delete"},
+        {"__getitem__", Dim_getItem, METH_VARARGS, "get item"},
+        {NULL, NULL, 0, NULL}
+    };
+
+    PyObject *bsp_getDimType() {
+        PyObject *moduleDict = PyModule_GetDict(module_);
+        return PyDict_GetItemString(moduleDict, "Dim");
+    }
+
+    bool allSlices(PyObject *objIndex) {
+        if (PyTuple_Check(objIndex)) {
+            Py_ssize_t nDims = PyTuple_GET_SIZE(objIndex);
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
+                if (!PySlice_Check(objDim)) {
+                    return false;
+                }
+            }
+        } else {
+            if (!PySlice_Check(objIndex)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    IndexSet *allSlicesToIndexSet(PyObject *objIndex, unsigned int nDims, Py_ssize_t sliceLength[], std::string &rangeID,
+            uint64_t elemCountAlongDim[]) {
+        Py_ssize_t start[7], stop[7], step[7];
+        if (PyTuple_Check(objIndex)) {
+            if (PyTuple_GET_SIZE(objIndex) != nDims) {
+                bsp_typeError("unmatched nDims");
+                return NULL;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
+                if (!PySlice_Check(objDim)) {
+                    bsp_typeError("only slice indices are supported");
+                    return NULL;
+                }
+                PySlice_GetIndices(objDim, sliceLength[iDim], start + iDim, stop + iDim, step + iDim);
+            }
+        } else {
+            if (1 != nDims) {
+                bsp_typeError("unmatched nDims");
+                return NULL;
+            }
+            if (!PySlice_Check(objIndex)) {
+                bsp_typeError("only slice indices are supported");
+                return NULL;
+            }
+            PySlice_GetIndices(objIndex, sliceLength[0], start, stop, step);
+        }
+
+        uint64_t myStart[7], myStop[7];
+        int32_t myStep[7];
+        std::stringstream ss;
+        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+            myStart[iDim] = start[iDim];
+            myStop[iDim] = stop[iDim];
+            myStep[iDim] = step[iDim];
+            int64_t dimSize = ((int64_t)stop[iDim] - (int64_t)start[iDim] - 1) / (int32_t)step[iDim] + 1;
+            if (dimSize <= 0) {
+                bsp_typeError("invalid slice");
+                return NULL;
+            }
+            elemCountAlongDim[iDim] = dimSize;
+            ss << start[iDim] << ":" << stop[iDim] << ":" << step[iDim] << ";";
+        }
+        rangeID = ss.str();
+
+        for (unsigned int iDim = 0; iDim < nDims; ++ iDim) {
+            if (myStart[iDim] >= sliceLength[iDim] || myStop[iDim] > sliceLength[iDim]) {
+                bsp_typeError("out-of-range index");
+                return NULL;
+            }
+        }
+        return new IndexSetRegionTensor(nDims, myStart, myStop, myStep);
+    }
+
+    IndexSet *objectToIndexSet(PyObject *objIndex, unsigned int nDims, Py_ssize_t sliceLength[], std::string &rangeID,
+            uint64_t elemCountAlongDim[]) {
+        if (allSlices(objIndex))
+            return allSlicesToIndexSet(objIndex, nDims, sliceLength, rangeID, elemCountAlongDim);
+        LocalArray *lower[7], *upper[7], *step[7];
+        if (PyTuple_Check(objIndex)) {
+            if (PyTuple_GET_SIZE(objIndex) != nDims) {
+                bsp_typeError("unmatched nDims");
+                return NULL;
+            }
+            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
+                bool needDel = false;
+                if (PySlice_Check(objDim)) {
+                    objDim = dimToObject(sliceLength[iDim], objDim);
+                    needDel = true;
+                }
+                DimItem *item = (DimItem *)PyLong_AsSize_t(objDim);
+                lower[iDim] = item->_lower;
+                upper[iDim] = item->_upper;
+                step[iDim] = item->_step;
+                if (needDel)
+                    Py_CLEAR(objDim);
+            }
+        } else {
+            if (1 != nDims) {
+                bsp_typeError("unmatched nDims");
+                return NULL;
+            }
+            PyObject *objDim = objIndex;
+            bool needDel = false;
+            if (PySlice_Check(objIndex)) {
+                objDim = dimToObject(sliceLength[0], objDim);
+                needDel = true;
+            }
+            DimItem *item = (DimItem *)PyLong_AsSize_t(objDim);
+            lower[0] = item->_lower;
+            upper[0] = item->_upper;
+            step[0] = item->_step;
+            if (needDel)
+                Py_CLEAR(objDim);
+        }
+
+        std::stringstream ss;
+        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
+            uint64_t *start = (uint64_t *)lower[iDim]->getData();
+            uint64_t *stop = (uint64_t *)upper[iDim]->getData();
+            int32_t *myStep = (int32_t *)step[iDim]->getData();
+            uint64_t n = lower[iDim]->getElementCount(LocalArray::ALL_DIMS);
+            elemCountAlongDim[iDim] = 0;
+            for (uint64_t i = 0; i < n; ++ i) {
+                int64_t dimSize = ((int64_t)stop[i] - (int64_t)start[i] - 1) / myStep[i] + 1;
+                if (dimSize <= 0) {
+                    bsp_typeError("invalid slice");
+                    return NULL;
+                }
+                elemCountAlongDim[iDim] += dimSize;
+                ss << start[i] << ":" << stop[i] << ":" << step[i] << ";";
+            }
+            ss << ";";
+        }
+        rangeID = ss.str();
+
+        return new IndexSetRegionTensor(nDims, lower, upper, step);
+    }
+
     static PyObject *Future_init(PyObject *self, PyObject *args) {
         bsp_getScriptPos();
         unsigned long procID = 0;
@@ -175,7 +444,7 @@ extern "C" {
             Py_RETURN_NONE;
         }
 
-        if (procID >= runtime_->getNumberOfProcesses() || procID == runtime_->getMyProcessID()) {
+        if (procID >= runtime_->getNumberOfProcesses()) {
             bsp_typeError("invalid procID");
             Py_RETURN_NONE;
         }
@@ -185,11 +454,35 @@ extern "C" {
             bsp_typeError("invalid varName");
             Py_RETURN_NONE;
         }
-        if (!nobjServer->isGlobal()) {
+        PyObject *objDimType = bsp_getDimType();
+        if (nobjServer->isGlobal()) {
+            GlobalArray *globalArray = nobjServer->_globalArray();
+            unsigned int nDims = globalArray->getNumberOfDimensions();
+            for (unsigned int iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = globalArray->getElementCount(iDim);
+                PyObject *param = Py_BuildValue("(k)",dimSize);
+                PyObject *dimObject = PyObject_CallObject(objDimType,param);
+                Py_CLEAR(param);
+                std::stringstream ss;
+                ss << "dim" << iDim;
+                PyObject_SetAttrString(objSelf,ss.str().c_str(),dimObject);
+            }
+        } else {
             ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
             if (NULL == registration) {
                 bsp_typeError("unregistered server array");
                 Py_RETURN_NONE;
+            }
+            ArrayShape *shape = registration->getArrayShape(procID);
+            unsigned int nDims = shape->getNumberOfDimensions();
+            for (unsigned int iDim = 0; iDim < nDims; ++ iDim) {
+                uint64_t dimSize = shape->getElementCount(iDim);
+                PyObject *param = Py_BuildValue("(k)",dimSize);
+                PyObject *dimObject = PyObject_CallObject(objDimType,param);
+                Py_CLEAR(param);
+                std::stringstream ss;
+                ss << "dim" << iDim;
+                PyObject_SetAttrString(objSelf,ss.str().c_str(),dimObject);
             }
         }
 
@@ -235,7 +528,6 @@ extern "C" {
         for (std::map<std::string, LocalArray *>::iterator iter = myUpdates.begin();
                 iter != myUpdates.end(); ++ iter) {
             delete iter->second;
-            std::cout << futureID << "#" << iter->first << " deleted" << std::endl;
         }
         myUpdates.clear();
     }
@@ -262,6 +554,16 @@ extern "C" {
         std::string futureID = futureIDs_[objSelf];
         futures_.erase(futureID);
         futureIDs_.erase(objSelf);
+
+        for (unsigned int iDim = 0; iDim < 7; ++ iDim) {
+            std::stringstream ss;
+            ss << "dim" << iDim;
+            std::string s = ss.str();
+            if (PyObject_HasAttrString(objSelf, s.c_str()))
+                PyObject_DelAttrString(objSelf, s.c_str());
+            else
+                break;
+        }
         Py_RETURN_NONE;
     }
 
@@ -307,7 +609,7 @@ extern "C" {
             assert(nDims <= 7 && nDims > 0);
         }
 
-        Py_ssize_t start[7], stop[7], step[7], sliceLength[7];
+        Py_ssize_t sliceLength[7];
         if (nobjServer->isGlobal()) {
             GlobalArray *globalArray = nobjServer->_globalArray();
             if (globalArray->getNumberOfDimensions() != nDims) {
@@ -336,40 +638,9 @@ extern "C" {
             }
         }
 
-        if (PyTuple_Check(objIndex)) {
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
-                if (!PySlice_Check(objDim)) {
-                    bsp_typeError("only slice indices are supported");
-                    Py_RETURN_NONE;
-                }
-                PySlice_GetIndices(objDim, sliceLength[iDim], start + iDim, stop + iDim, step + iDim);
-            }
-        } else {
-            if (!PySlice_Check(objIndex)) {
-                bsp_typeError("only slice indices are supported");
-                Py_RETURN_NONE;
-            }
-            PySlice_GetIndices(objIndex, sliceLength[0], start, stop, step);
-        }
-
-        uint64_t myStart[7], myStop[7];
-        int32_t myStep[7];
+        std::string rangeID;
         uint64_t elemCountAlongDim[7];
-        std::stringstream ss;
-        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-            myStart[iDim] = start[iDim];
-            myStop[iDim] = stop[iDim];
-            myStep[iDim] = step[iDim];
-            int64_t dimSize = ((int64_t)stop[iDim] - (int64_t)start[iDim] - 1) / (int32_t)step[iDim] + 1;
-            if (dimSize <= 0) {
-                bsp_typeError("invalid slice");
-                Py_RETURN_NONE;
-            }
-            elemCountAlongDim[iDim] = dimSize;
-            ss << start[iDim] << ":" << stop[iDim] << ":" << step[iDim] << ";";
-        }
-        std::string rangeID = ss.str();
+        IndexSet *indexSet = objectToIndexSet(objIndex, nDims, sliceLength, rangeID, elemCountAlongDim);
 
         ArrayShape::ElementType elementType;
         uint64_t numberOfBytesPerElement;
@@ -377,26 +648,12 @@ extern "C" {
             GlobalArray *globalArray = nobjServer->_globalArray();
             elementType = globalArray->getElementType();
             numberOfBytesPerElement = globalArray->getNumberOfBytesPerElement();
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                uint64_t dimSize = globalArray->getElementCount(iDim);
-                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
-                    bsp_typeError("out-of-range index");
-                    Py_RETURN_NONE;
-                }
-            }
         } else {
             ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
             assert(NULL != registration);
             ArrayShape *shape = registration->getArrayShape(procID);
             elementType = shape->getElementType();
             numberOfBytesPerElement = shape->getNumberOfBytesPerElement();
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                uint64_t dimSize = shape->getElementCount(iDim);
-                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
-                    bsp_typeError("out-of-range index");
-                    Py_RETURN_NONE;
-                }
-            }
         }
 
         std::map<std::string, LocalArray *> &myRequests = requests_[futureID];
@@ -408,13 +665,13 @@ extern "C" {
         } else {
             clientArray = iter->second;
         }
-        IndexSetRegionTensor indexSet(nDims, myStart, myStop, myStep);
 
         if (nobjServer->isGlobal()) {
-            runtime_->requestFrom(*nobjServer->_globalArray(), indexSet, *clientArray, scriptPos_);
+            runtime_->requestFrom(*nobjServer->_globalArray(), *indexSet, *clientArray, scriptPos_);
         } else {
-            runtime_->requestFrom(*nobjServer->_localArray(), procID, indexSet, *clientArray, scriptPos_);
+            runtime_->requestFrom(*nobjServer->_localArray(), procID, *indexSet, *clientArray, scriptPos_);
         }
+        delete indexSet;
         return localArrayAsNumpy(clientArray);
     }
 
@@ -456,7 +713,7 @@ extern "C" {
             assert(nDims <= 7 && nDims > 0);
         }
 
-        Py_ssize_t start[7], stop[7], step[7], sliceLength[7];
+        Py_ssize_t sliceLength[7];
         if (nobjServer->isGlobal()) {
             GlobalArray *globalArray = nobjServer->_globalArray();
             if (globalArray->getNumberOfDimensions() != nDims) {
@@ -485,40 +742,9 @@ extern "C" {
             }
         }
 
-        if (PyTuple_Check(objIndex)) {
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                PyObject *objDim = PyTuple_GetItem(objIndex, iDim);
-                if (!PySlice_Check(objDim)) {
-                    bsp_typeError("only slice indices are supported");
-                    Py_RETURN_NONE;
-                }
-                PySlice_GetIndices(objDim, sliceLength[iDim], start + iDim, stop + iDim, step + iDim);
-            }
-        } else {
-            if (!PySlice_Check(objIndex)) {
-                bsp_typeError("only slice indices are supported");
-                Py_RETURN_NONE;
-            }
-            PySlice_GetIndices(objIndex, sliceLength[0], start, stop, step);
-        }
-
-        uint64_t myStart[7], myStop[7];
-        int32_t myStep[7];
+        std::string rangeID;
         uint64_t elemCountAlongDim[7];
-        std::stringstream ss;
-        for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-            myStart[iDim] = start[iDim];
-            myStop[iDim] = stop[iDim];
-            myStep[iDim] = step[iDim];
-            int64_t dimSize = ((int64_t)stop[iDim] - (int64_t)start[iDim] - 1) / (int32_t)step[iDim] + 1;
-            if (dimSize <= 0) {
-                bsp_typeError("invalid slice");
-                Py_RETURN_NONE;
-            }
-            elemCountAlongDim[iDim] = dimSize;
-            ss << start[iDim] << ":" << stop[iDim] << ":" << step[iDim] << ";";
-        }
-        std::string rangeID = ss.str();
+        IndexSet *indexSet = objectToIndexSet(objIndex, nDims, sliceLength, rangeID, elemCountAlongDim);
 
         ArrayShape::ElementType elementType;
         uint64_t numberOfBytesPerElement;
@@ -526,26 +752,12 @@ extern "C" {
             GlobalArray *globalArray = nobjServer->_globalArray();
             elementType = globalArray->getElementType();
             numberOfBytesPerElement = globalArray->getNumberOfBytesPerElement();
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                uint64_t dimSize = globalArray->getElementCount(iDim);
-                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
-                    bsp_typeError("out-of-range index");
-                    Py_RETURN_NONE;
-                }
-            }
         } else {
             ArrayRegistration *registration = nobjServer->_localArray()->getRegistration();
             assert(NULL != registration);
             ArrayShape *shape = registration->getArrayShape(procID);
             elementType = shape->getElementType();
             numberOfBytesPerElement = shape->getNumberOfBytesPerElement();
-            for (Py_ssize_t iDim = 0; iDim < nDims; ++ iDim) {
-                uint64_t dimSize = shape->getElementCount(iDim);
-                if (myStart[iDim] >= dimSize || myStop[iDim] > dimSize) {
-                    bsp_typeError("out-of-range index");
-                    Py_RETURN_NONE;
-                }
-            }
         }
 
         std::map<std::string, LocalArray *> &myUpdates = updates_[futureID];
@@ -558,14 +770,7 @@ extern "C" {
             requested = true;
             clientArray = iter->second;
         }
-        if (!requested) {
-            IndexSetRegionTensor indexSet(nDims, myStart, myStop, myStep);
-            if (nobjServer->isGlobal()) {
-                runtime_->requestTo(*nobjServer->_globalArray(), indexSet, *clientArray, opID, scriptPos_);
-            } else {
-                runtime_->requestTo(*nobjServer->_localArray(), procID, indexSet, *clientArray, opID, scriptPos_);
-            }
-        }
+
         try {
             PyArrayObject *updArray = (PyArrayObject *)localArrayAsNumpy(clientArray);
             if (PyArray_Check(objValue)) {
@@ -582,11 +787,19 @@ extern "C" {
             Py_RETURN_NONE;
         }
 
+        if (!requested) {
+            if (nobjServer->isGlobal()) {
+                runtime_->requestTo(*nobjServer->_globalArray(), *indexSet, *clientArray, opID, scriptPos_);
+            } else {
+                runtime_->requestTo(*nobjServer->_localArray(), procID, *indexSet, *clientArray, opID, scriptPos_);
+            }
+        }
+        delete indexSet;
+
         Py_RETURN_NONE;
     }
 
-    static PyMethodDef FutureMethods[] = 
-    {
+    static PyMethodDef FutureMethods[] = {
         {"__init__", Future_init, METH_VARARGS,  "init future object with procID, varName and op"},
         {"__del__", Future_del, METH_VARARGS,  "delete future object"},
         {"__getitem__", Future_getItem, METH_VARARGS, "get item"},
@@ -2560,6 +2773,28 @@ extern "C" {
         return PyModule_Create(&bspModule);
     }
 
+    void addType(const char *typeName, PyMethodDef *methods, PyObject *module) {
+        PyObject *classDict = PyDict_New();
+        int iMethod = 0;
+        while (methods[iMethod].ml_name) {
+            PyObject *closure = PyCFunction_New(methods + iMethod, NULL);
+            PyObject *method = PyInstanceMethod_New(closure);
+            PyDict_SetItemString(classDict, methods[iMethod].ml_name, method);
+            Py_CLEAR(closure);
+            Py_CLEAR(method);
+            ++ iMethod;
+        }
+        PyObject *classBase = PyTuple_New(0);
+        PyObject *className = PyUnicode_FromString(typeName);
+        PyObject *myClass = PyObject_CallFunctionObjArgs((PyObject *) &PyType_Type, className, classBase, classDict, NULL);
+
+        PyObject *moduleDict = PyModule_GetDict(module);
+        PyDict_SetItemString(moduleDict, typeName, myClass);
+        Py_CLEAR(classDict);
+        Py_CLEAR(className);
+        Py_CLEAR(myClass);
+    }
+
     void initBSP(int *pArgc, char ***pArgv) {
         runtime_ = new Runtime(pArgc, pArgv);
         //runtime_->setVerbose(true);
@@ -2601,27 +2836,9 @@ extern "C" {
         Py_XINCREF(traceback_extractStack_);
 
         PyObject *module = PyImport_ImportModule("bsp");
-
-        PyObject *classDict = PyDict_New();
-        int iMethod = 0;
-        while (FutureMethods[iMethod].ml_name) {
-            PyObject *closure = PyCFunction_New(FutureMethods + iMethod, NULL);
-            PyObject *method = PyInstanceMethod_New(closure);
-            PyDict_SetItemString(classDict, FutureMethods[iMethod].ml_name, method);
-            Py_CLEAR(closure);
-            Py_CLEAR(method);
-            ++ iMethod;
-        }
-        PyObject *classBase = PyTuple_New(0);
-        PyObject *className = PyUnicode_FromString("Future");
-        PyObject *futureClass = PyObject_CallFunctionObjArgs((PyObject *) &PyType_Type, className, classBase, classDict, NULL);
-
-        PyObject *moduleDict = PyModule_GetDict(module);
-        PyDict_SetItemString(moduleDict, "Future", futureClass);
-        Py_CLEAR(classDict);
-        Py_CLEAR(className);
-        Py_CLEAR(futureClass);
-
+        module_ = module;
+        addType("Dim", DimMethods, module);
+        addType("Future", FutureMethods, module);
     }
 
 }

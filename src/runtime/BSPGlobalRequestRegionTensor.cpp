@@ -7,6 +7,7 @@
 
 #include "BSPGlobalRequestRegionTensor.hpp"
 #include <cassert>
+#include <iostream>
 
 using namespace BSP;
 
@@ -25,6 +26,8 @@ GlobalRequestRegion(partition) {
     uint64_t * nComponentsAtPositionAlongDim[7];
     uint64_t **lowerLocalOffsetAtPositionAlongDim[7];
     uint64_t **upperLocalOffsetAtPositionAlongDim[7];
+    int32_t **localStepAlongDim[7];
+
     for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
         uint64_t nProcsAlongThisDim = partition.getProcCount(iDim);
         nComponentsAtPositionAlongDim[iDim] = new uint64_t[nProcsAlongThisDim];
@@ -32,14 +35,18 @@ GlobalRequestRegion(partition) {
                 new uint64_t *[nProcsAlongThisDim];
         upperLocalOffsetAtPositionAlongDim[iDim] =
                 new uint64_t *[nProcsAlongThisDim];
+        localStepAlongDim[iDim] = new int32_t *[nProcsAlongThisDim];
+
         if (nComponentsAtPositionAlongDim[iDim] == NULL
                 || lowerLocalOffsetAtPositionAlongDim[iDim] == NULL
-                || upperLocalOffsetAtPositionAlongDim[iDim] == NULL)
+                || upperLocalOffsetAtPositionAlongDim[iDim] == NULL
+                || localStepAlongDim[iDim] == NULL)
             throw ENotEnoughMemory();
         for (uint64_t iProc = 0; iProc < nProcsAlongThisDim; iProc++) {
             nComponentsAtPositionAlongDim[iDim][iProc] = 0;
             lowerLocalOffsetAtPositionAlongDim[iDim][iProc] = NULL;
             upperLocalOffsetAtPositionAlongDim[iDim][iProc] = NULL;
+            localStepAlongDim[iDim][iProc] = NULL;
         }
     }
 
@@ -69,11 +76,35 @@ GlobalRequestRegion(partition) {
                     _upperOwnerPositionAlongDim[iDim][iComponent]);
             _stepAlongDim[iDim][iComponent] =
                     indexSet._stepAlongDim[iDim][iComponent];
-            assert(_stepAlongDim[iDim][iComponent] == 1);
-            for (uint64_t iProc = _lowerOwnerPositionAlongDim[iDim][iComponent];
-                    iProc <= _upperOwnerPositionAlongDim[iDim][iComponent];
-                    iProc++)
-                nComponentsAtPositionAlongDim[iDim][iProc]++;
+
+            int32_t step = indexSet._stepAlongDim[iDim][iComponent];
+            assert(step != 0);
+            int64_t start = (int64_t) indexSet._lowerComponentAlongDim[iDim][iComponent];
+            int64_t stop = (int64_t) indexSet._upperComponentAlongDim[iDim][iComponent];
+            uint64_t iProc0 = _lowerOwnerPositionAlongDim[iDim][iComponent];
+            uint64_t iProc1 = _upperOwnerPositionAlongDim[iDim][iComponent];
+            if (step < 0) {
+                int64_t temp = start;
+                start = stop;
+                stop = temp;
+                step = -step;
+
+                uint64_t temp2 = iProc0;
+                iProc0 = iProc1;
+                iProc1 = temp2;
+            }
+
+            for (uint64_t iProc = iProc0; iProc <= iProc1; iProc++) {
+                int64_t nodeStart = (int64_t)getNode(iDim, iProc);
+                int64_t nodeStop = (int64_t)getNode(iDim, iProc + 1);
+                int64_t minStop = nodeStop < stop + 1 ? nodeStop : stop + 1;
+                // if there exists a nonnegative integer k such that start + k * step >= nodeStart and < min(nodeStop, stop + 1), the proc owns elements in this region
+                int64_t k = nodeStart <= start ? 0 : (nodeStart - start + step - 1) / step;
+
+                if (start + k * step < minStop) {
+                    nComponentsAtPositionAlongDim[iDim][iProc]++;
+                }
+            }
         }
     }
 
@@ -87,8 +118,10 @@ GlobalRequestRegion(partition) {
                     new uint64_t[nComponentsAtPositionAlongDim[iDim][iProc]];
             upperLocalOffsetAtPositionAlongDim[iDim][iProc] =
                     new uint64_t[nComponentsAtPositionAlongDim[iDim][iProc]];
+            localStepAlongDim[iDim][iProc] = new int32_t[nComponentsAtPositionAlongDim[iDim][iProc]]; 
             if (lowerLocalOffsetAtPositionAlongDim[iDim][iProc] == NULL
-                    || upperLocalOffsetAtPositionAlongDim[iDim][iProc] == NULL)
+                    || upperLocalOffsetAtPositionAlongDim[iDim][iProc] == NULL
+                    || localStepAlongDim[iDim][iProc] == NULL)
                 throw ENotEnoughMemory();
         }
     }
@@ -102,25 +135,65 @@ GlobalRequestRegion(partition) {
 
         for (uint64_t iComponent = 0; iComponent < _nComponentsAlongDim[iDim];
                 iComponent++) {
-            for (uint64_t iProc = _lowerOwnerPositionAlongDim[iDim][iComponent];
-                    iProc <= _upperOwnerPositionAlongDim[iDim][iComponent];
-                    iProc++) {
+
+            int32_t step = indexSet._stepAlongDim[iDim][iComponent];
+            assert(step != 0);
+            int64_t start = (int64_t) indexSet._lowerComponentAlongDim[iDim][iComponent];
+            int64_t stop = (int64_t) indexSet._upperComponentAlongDim[iDim][iComponent];
+            uint64_t iProc0 = _lowerOwnerPositionAlongDim[iDim][iComponent];
+            uint64_t iProc1 = _upperOwnerPositionAlongDim[iDim][iComponent];
+            bool negStep = false;
+            if (step < 0) {
+                negStep = true;
+                int64_t temp = start;
+                start = stop;
+                stop = temp;
+                step = -step;
+
+                uint64_t temp2 = iProc0;
+                iProc0 = iProc1;
+                iProc1 = temp2;
+            }
+            for (uint64_t iProc = iProc0; iProc <= iProc1; iProc++) {
+                int64_t nodeStart = (int64_t)getNode(iDim, iProc);
+                int64_t nodeStop = (int64_t)getNode(iDim, iProc + 1);
+                int64_t minStop = nodeStop < stop + 1 ? nodeStop : stop + 1;
+                // if there exists a nonnegative integer k such that start + k * step >= nodeStart and < min(nodeStop, stop + 1), the proc owns elements in this region
+                int64_t k = nodeStart <= start ? 0 : (nodeStart - start + step - 1) / step;
+                if (start + k * step >= minStop)
+                    continue;
+
                 uint64_t iLocalComponent =
                         nComponentsAtPositionAlongDim[iDim][iProc]++;
+
+                // lowerLocalOffset
                 if (iProc == _lowerOwnerPositionAlongDim[iDim][iComponent]) {
                     lowerLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] =
                             _lowerOffsetInOwnerAlongDim[iDim][iComponent];
                 } else {
-                    lowerLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] =
-                            0;
+                    int64_t lower = start + k * step - nodeStart;
+                    if (negStep) {
+                        int64_t dK = (nodeStop - 1 - nodeStart - lower) / step;
+                        lower += dK * step;
+                    }
+                    lowerLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] = lower;
                 }
+
+                // upperLocalOffset
                 if (iProc == _upperOwnerPositionAlongDim[iDim][iComponent]) {
                     upperLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] =
                             _upperOffsetInOwnerAlongDim[iDim][iComponent];
                 } else {
-                    upperLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] =
-                            getNode(iDim, iProc + 1) - getNode(iDim, iProc) - 1;
+                    int upper = start + k * step - nodeStart;
+                    if (!negStep) {
+                        int64_t dK = (nodeStop - 1 - nodeStart - upper) / step;
+                        upper += dK * step;
+                    }
+                    upperLocalOffsetAtPositionAlongDim[iDim][iProc][iLocalComponent] = upper;
                 }
+
+                // localStep
+                localStepAlongDim[iDim][iProc][iLocalComponent] = negStep ? -step : step;
             }
         }
     }
@@ -150,16 +223,17 @@ GlobalRequestRegion(partition) {
         for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
             uint64_t nLocalComponents =
                     nComponentsAtPositionAlongDim[iDim][position[iDim]];
-            _indexLength[iProc] += 1 + 2 * nLocalComponents;
+            _indexLength[iProc] += 1 + 3 * nLocalComponents;
             uint64_t localElementCountAlongDim = 0;
             for (uint64_t iLocalComponent = 0;
                     iLocalComponent < nLocalComponents;
                     ++iLocalComponent) {
                 localElementCountAlongDim +=
-                        upperLocalOffsetAtPositionAlongDim[iDim]
+                        ((int64_t) upperLocalOffsetAtPositionAlongDim[iDim]
                         [position[iDim]][iLocalComponent]
-                        - lowerLocalOffsetAtPositionAlongDim[iDim]
-                        [position[iDim]][iLocalComponent]
+                        - (int64_t) lowerLocalOffsetAtPositionAlongDim[iDim]
+                        [position[iDim]][iLocalComponent]) 
+                        / localStepAlongDim[iDim][position[iDim]][iLocalComponent]
                         + 1;
             }
             localElementCount *= localElementCountAlongDim;
@@ -179,15 +253,17 @@ GlobalRequestRegion(partition) {
                     iComponent
                     < nComponentsAtPositionAlongDim[iDim][position[iDim]];
                     iComponent++) {
-                currentIndex[(iComponent << 1)] =
+                currentIndex[(iComponent << 1) + iComponent] =
                         lowerLocalOffsetAtPositionAlongDim[iDim][position[iDim]][iComponent];
-                currentIndex[(iComponent << 1) + 1] =
-                        upperLocalOffsetAtPositionAlongDim[iDim][position[iDim]][iComponent]
-                        - lowerLocalOffsetAtPositionAlongDim[iDim][position[iDim]][iComponent]
+                currentIndex[(iComponent << 1) + iComponent + 1] =
+                        (upperLocalOffsetAtPositionAlongDim[iDim][position[iDim]][iComponent]
+                        - lowerLocalOffsetAtPositionAlongDim[iDim][position[iDim]][iComponent])
+                        / localStepAlongDim[iDim][position[iDim]][iComponent]
                         + 1;
+                currentIndex[(iComponent << 1) + iComponent + 2] =
+                    localStepAlongDim[iDim][position[iDim]][iComponent];
             }
-            currentIndex += nComponentsAtPositionAlongDim[iDim][position[iDim]]
-                    << 1;
+            currentIndex += nComponentsAtPositionAlongDim[iDim][position[iDim]] * 3;
         }
     }
 
@@ -199,10 +275,12 @@ GlobalRequestRegion(partition) {
                 continue;
             delete[] lowerLocalOffsetAtPositionAlongDim[iDim][iProc];
             delete[] upperLocalOffsetAtPositionAlongDim[iDim][iProc];
+            delete[] localStepAlongDim[iDim][iProc];
         }
         delete[] nComponentsAtPositionAlongDim[iDim];
         delete[] lowerLocalOffsetAtPositionAlongDim[iDim];
         delete[] upperLocalOffsetAtPositionAlongDim[iDim];
+        delete[] localStepAlongDim[iDim];
     }
 
     if (_nData != indexSet.getNumberOfIndices())
@@ -236,11 +314,15 @@ void GlobalRequestRegionTensor::getData(const uint64_t numberOfBytesPerElement,
     }
     while (regionCombination[0] < _nComponentsAlongDim[0]) {
         uint64_t regionWidth[7];
+        int32_t regionStep[7];
         for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
             regionWidth[iDim] = getRegionWidth(iDim, regionCombination[iDim]);
+            regionStep[iDim] = _stepAlongDim[iDim][regionCombination[iDim]];
         }
+
         // iterate through the points within this region
-        uint64_t combination[7], position[7], localOffset[7], localWidth[7];
+        uint64_t combination[7], position[7], localWidth[7];
+        int64_t localOffset[7];
         for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
             combination[iDim] = 0;
             position[iDim] =
@@ -265,12 +347,21 @@ void GlobalRequestRegionTensor::getData(const uint64_t numberOfBytesPerElement,
             for (int iDim = _numberOfDimensions - 1; iDim >= 0; iDim--) {
                 combination[iDim]++;
                 if (combination[iDim] < regionWidth[iDim]) {
-                    localOffset[iDim]++;
+                    localOffset[iDim] += regionStep[iDim];
                     if (localOffset[iDim] >= localWidth[iDim]) {
-                        position[iDim]++;
-                        localOffset[iDim] = 0;
-                        localWidth[iDim] = getNode(iDim, position[iDim] + 1)
-                                - getNode(iDim, position[iDim]);
+                        while (localOffset[iDim] >= localWidth[iDim]) {
+                            localOffset[iDim] -= localWidth[iDim];
+                            ++ position[iDim];
+                            localWidth[iDim] = getNode(iDim, position[iDim] + 1)
+                                    - getNode(iDim, position[iDim]);
+                        }
+                    } else if (localOffset[iDim] < 0) {
+                        while (localOffset[iDim] < 0) {
+                            -- position[iDim];
+                            localWidth[iDim] = getNode(iDim, position[iDim] + 1)
+                                    - getNode(iDim, position[iDim]);
+                            localOffset[iDim] += localWidth[iDim];
+                        }
                     }
                 }
 
@@ -314,7 +405,6 @@ void GlobalRequestRegionTensor::setData(const uint64_t numberOfBytesPerElement,
     for (uint64_t iProc = 0; iProc < _nProcsInGrid; iProc++) {
         dataIndexAtProc[iProc] = 0;
     }
-
     // iterate through the regions
     uint64_t iData = 0;
     uint64_t regionCombination[7];
@@ -323,11 +413,15 @@ void GlobalRequestRegionTensor::setData(const uint64_t numberOfBytesPerElement,
     }
     while (regionCombination[0] < _nComponentsAlongDim[0]) {
         uint64_t regionWidth[7];
+        int32_t regionStep[7];
         for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
             regionWidth[iDim] = getRegionWidth(iDim, regionCombination[iDim]);
+            regionStep[iDim] = _stepAlongDim[iDim][regionCombination[iDim]];
         }
+
         // iterate through the points within this region
-        uint64_t combination[7], position[7], localOffset[7], localWidth[7];
+        uint64_t combination[7], position[7], localWidth[7];
+        int64_t localOffset[7];
         for (unsigned iDim = 0; iDim < _numberOfDimensions; iDim++) {
             combination[iDim] = 0;
             position[iDim] =
@@ -352,12 +446,21 @@ void GlobalRequestRegionTensor::setData(const uint64_t numberOfBytesPerElement,
             for (int iDim = _numberOfDimensions - 1; iDim >= 0; iDim--) {
                 combination[iDim]++;
                 if (combination[iDim] < regionWidth[iDim]) {
-                    localOffset[iDim]++;
+                    localOffset[iDim] += regionStep[iDim];
                     if (localOffset[iDim] >= localWidth[iDim]) {
-                        position[iDim]++;
-                        localOffset[iDim] = 0;
-                        localWidth[iDim] = getNode(iDim, position[iDim] + 1)
-                                - getNode(iDim, position[iDim]);
+                        while (localOffset[iDim] >= localWidth[iDim]) {
+                            localOffset[iDim] -= localWidth[iDim];
+                            ++ position[iDim];
+                            localWidth[iDim] = getNode(iDim, position[iDim] + 1)
+                                    - getNode(iDim, position[iDim]);
+                        }
+                    } else if (localOffset[iDim] < 0) {
+                        while (localOffset[iDim] < 0) {
+                            -- position[iDim];
+                            localWidth[iDim] = getNode(iDim, position[iDim] + 1)
+                                    - getNode(iDim, position[iDim]);
+                            localOffset[iDim] += localWidth[iDim];
+                        }
                     }
                 }
 

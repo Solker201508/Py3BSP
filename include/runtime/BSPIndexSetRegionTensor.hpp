@@ -21,7 +21,6 @@ public:
 			LocalArray **lowerComponentAlongDim,
 			LocalArray **upperComponentAlongDim,
                         LocalArray **stepAlongDim = NULL);
-        IndexSetRegionTensor(LocalArray &localArray);
         IndexSetRegionTensor(unsigned int nDims, uint64_t *start, uint64_t *stop, int32_t *step);
 	virtual ~IndexSetRegionTensor();
 protected:

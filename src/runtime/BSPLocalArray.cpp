@@ -2967,6 +2967,7 @@ void LocalArray::setElementsRegionTensor(const uint64_t *index,
             const char *validInput = input + iValid * _numberOfBytesPerElement;
             char *validData = _data
                     + (offset + deltaOffset) * _numberOfBytesPerElement;
+            //std::cout << "set data " << *(double *)validData << std::endl;
             iValid++;
             updateElement(validInput, validData, updateType);
 

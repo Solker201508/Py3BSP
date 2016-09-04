@@ -82,11 +82,15 @@ ArrayPartition::~ArrayPartition() {
 bool ArrayPartition::combineLocalArrays(Grid &grid, ArrayShape **localArrayRef) {
     uint64_t numberOfBytesPerElement =
             localArrayRef[0]->getNumberOfBytesPerElement();
+    _elementType = localArrayRef[0]->getElementType();
     uint64_t nProcsInGrid = grid.getSize(ALL_DIMS);
     uint64_t startProcID = grid.getStartProcID();
     uint64_t gridID[7] = {0, 0, 0, 0, 0, 0, 0};
     for (uint64_t procID = startProcID; procID < startProcID + nProcsInGrid;
             procID++) {
+        if (localArrayRef[procID - startProcID]->getElementType()
+                != _elementType)
+            return false;
         if (localArrayRef[procID - startProcID]->getNumberOfBytesPerElement()
                 != numberOfBytesPerElement)
             return false;
