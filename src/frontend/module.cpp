@@ -371,6 +371,7 @@ extern "C" {
         if (allSlices(objIndex))
             return allSlicesToIndexSet(objIndex, nDims, sliceLength, rangeID, elemCountAlongDim);
         LocalArray *lower[7], *upper[7], *step[7];
+        DimItem *items[7];
         if (PyTuple_Check(objIndex)) {
             if (PyTuple_GET_SIZE(objIndex) != nDims) {
                 bsp_typeError("unmatched nDims");
@@ -384,6 +385,7 @@ extern "C" {
                     needDel = true;
                 }
                 DimItem *item = (DimItem *)PyLong_AsSize_t(objDim);
+                items[iDim] = item;
                 lower[iDim] = item->_lower;
                 upper[iDim] = item->_upper;
                 step[iDim] = item->_step;
@@ -402,6 +404,7 @@ extern "C" {
                 needDel = true;
             }
             DimItem *item = (DimItem *)PyLong_AsSize_t(objDim);
+            items[0] = item;
             lower[0] = item->_lower;
             upper[0] = item->_upper;
             step[0] = item->_step;
@@ -429,7 +432,14 @@ extern "C" {
         }
         rangeID = ss.str();
 
-        return new IndexSetRegionTensor(nDims, lower, upper, step);
+        IndexSetRegionTensor *indexSet = new IndexSetRegionTensor(nDims, lower, upper, step);
+        for (unsigned int iDim = 0; iDim < nDims; ++ iDim) {
+            delete lower[iDim];
+            delete upper[iDim];
+            delete step[iDim];
+            delete items[iDim];
+        }
+        return indexSet;
     }
 
     static PyObject *Future_init(PyObject *self, PyObject *args) {
