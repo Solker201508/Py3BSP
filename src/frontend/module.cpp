@@ -2103,7 +2103,7 @@ extern "C" {
         char *strPenalty = NULL, *strMethod = NULL;
         double dPenaltyLevel = 1.0, dCoLevel = 1.0;
         int concensusRange = 0;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)ii: bsp.maximize", (char **)kwlist,
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OO|Okkssd(dOO)iO: bsp.maximize", (char **)kwlist,
                 &objParam, &objFunValue, &objFunGradient,
                 &kMaxIter, &kMLim, &strPenalty, &strMethod, &dPenaltyLevel, 
                 &dCoLevel, &objCoParams, &objCoMultipliers, &concensusRange, &objParallel);
@@ -2262,7 +2262,7 @@ extern "C" {
 
         if (kMLim > nParams)
             kMLim = nParams;
-        ParallelOptimization(funValue, funGradient);
+        ParallelOptimization parallel(funValue, funGradient);
         if (objParallel) {
             if (PyObject_IsTrue(objParallel)) {
                 funValue = parallelFunValue;

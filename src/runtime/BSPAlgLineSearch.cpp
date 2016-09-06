@@ -45,11 +45,15 @@ void LineSearch::optimize() {
     double d2 = 0.0;
     for (unsigned long i = 0; i < _nParams; ++ i) {
         if (_direction[i] != _direction[i])
-            return;
-        d2 += _direction[i] * _direction[i];
+            _direction[i] = 0.0;
+        else
+            d2 += _direction[i] * _direction[i];
     }
-    if (d2 == 0.0)
+    if (d2 == 0.0) {
+        _newF = _f;
+        memcpy(_newParams, _params, _nParams * sizeof(double));
         return;
+    }
 
     memcpy(_prevParams, _params, _nParams * sizeof(double));
     _prevF = _f;

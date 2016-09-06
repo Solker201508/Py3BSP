@@ -1,6 +1,7 @@
 #include "BSPAlgParallelOptimization.hpp"
 #include "BSPRuntime.hpp"
 #include <cassert>
+#include <iostream>
 
 BSP::Algorithm::ParallelOptimization *activeParalleOptimzation_ = NULL;
 
