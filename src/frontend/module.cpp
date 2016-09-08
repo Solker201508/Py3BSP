@@ -21,6 +21,7 @@ PyObject *pickle_loads_ = NULL;
 PyObject *ctypes_addressof_ = NULL;
 PyObject *traceback_ = NULL;
 PyObject *traceback_extractStack_ = NULL;
+PyObject *traceback_formatStack_ = NULL;
 PyObject **fromProc_ = NULL;
 PyObject *module_ = NULL;
 uint64_t nProcs_ = 0;
@@ -35,29 +36,20 @@ Runtime *runtime_ = NULL;
 
 void bsp_getScriptPos() {
     std::stringstream ss;
-    //ss << runtime_->getMyProcessID() << ": ------ call stack begin ------ " << std::endl;
     PyObject *param = Py_BuildValue("()");
-    PyObject *stack = PyObject_CallObject(traceback_extractStack_,param);
-    Py_DECREF(param);
-    if (stack) {
-        Py_ssize_t stackSize = PyList_GET_SIZE(stack);
-        for (Py_ssize_t level = 0; level < stackSize; ++level) {
-            PyObject *frame = PyList_GET_ITEM(stack, stackSize - 1 - level);
-            char *fileName = NULL;
-            long line = 0;
-            char *funcName = NULL;
-            char *lineText = NULL;
-            int ok = PyArg_ParseTuple(frame,"slss:bsp.getScriptPos", &fileName,&line,&funcName,&lineText);
-            if (!ok) {
-                PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
-                scriptPos_ = "";
-                return;
-            }
-            ss << "#" << level << ": FILE:" << fileName << ", LINE:" << line << ", FUNCTION:" << funcName << ", CODE:" <<std::endl
-                << ">>> " << lineText << std::endl;
+    PyObject *objListStack = PyObject_CallObject(traceback_formatStack_,param);
+    Py_ssize_t stackSize = PyList_GET_SIZE(objListStack);
+    for (Py_ssize_t level = 0; level < stackSize; ++level) {
+        PyObject *objStrFrame = PyList_GET_ITEM(objListStack, stackSize - 1 - level);
+        char *strFrame = NULL;
+        int ok = PyArg_Parse(objStrFrame, "s", &strFrame);
+        if (!ok) {
+            PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
+            scriptPos_ = "";
+            return;
         }
+        ss << "#" << level << ": " << strFrame <<std::endl;
     }
-    //ss << runtime_->getMyProcessID() << ": ------  call stack end  ------ " << std::endl;
     scriptPos_ =  ss.str();
 }
 
@@ -2844,6 +2836,9 @@ extern "C" {
 
         traceback_extractStack_ = PyObject_GetAttrString(traceback_, "extract_stack");
         Py_XINCREF(traceback_extractStack_);
+
+        traceback_formatStack_ = PyObject_GetAttrString(traceback_, "format_stack");
+        Py_XINCREF(traceback_formatStack_);
 
         PyObject *module = PyImport_ImportModule("bsp");
         module_ = module;
