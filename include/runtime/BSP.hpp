@@ -49,6 +49,11 @@
 #include "BSPAlgApriori.hpp"
 #include "BSPAlgParallelOptimization.hpp"
 
+#include "BSPAlgMatrix.hpp"
+#include "BSPAlgLU.hpp"
+#include "BSPAlgCholesky.hpp"
+#include "BSPAlgEigen.hpp"
+
 #include "BSPRuntime.hpp"
 
 #endif	/* BSP_HPP */

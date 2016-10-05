@@ -1178,6 +1178,7 @@ void Runtime::exchange(uint64_t procID, const char *tag) {
 }
 
 void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
+    _nal.reset();
     uint32_t hashTag1 = BKDRHash(tag);
     uint32_t hashTag2 = APHash(tag);
 
@@ -1248,6 +1249,8 @@ void Runtime::exchange(bool* MatrixOfSendTo, const char *tag) {
         partnerReqUpdCount = partnerCountAndPass[0];
         if (_verbose) {
             std::cout << "done" << std::endl;
+            std::cout << "my count = " << myCountAndPass[0] << std::endl;
+            std::cout << "partner count = " << partnerCountAndPass[0] << std::endl;
         }
 
         // report error if the passwords dont match
@@ -1926,12 +1929,14 @@ void Runtime::globalize(std::vector<std::string> nameList, const unsigned nGridD
     _nal.allGather(buffer, globalBuffer, bufferSize * sizeof(size_t));
 
     // examine the consistency of nDims and elementSize
-    for (size_t i = 0; i < n; ++i) {
-        for (uint64_t iProc = 0; iProc < _nProcs; ++iProc) {
-            if (!grid.containsProc(iProc))
-                continue;
-            if (buffer[0] != globalBuffer[iProc * bufferSize])
-                throw ENotAbleToShare(nameList[i].c_str());
+    if (grid.containsProc(_myProcID)) {
+        for (size_t i = 0; i < n; ++i) {
+            for (uint64_t iProc = 0; iProc < _nProcs; ++iProc) {
+                if (!grid.containsProc(iProc))
+                    continue;
+                if (buffer[i << 3] != globalBuffer[iProc * bufferSize + (i << 3)])
+                    throw ENotAbleToShare(nameList[i].c_str());
+            }
         }
     }
 
@@ -1953,9 +1958,10 @@ void Runtime::globalize(std::vector<std::string> nameList, const unsigned nGridD
     for (size_t i = 0; i < n; ++i) {
         NamedObject *nobj = getObject(nameList[i]);
         LocalArray *array = nobj->_localArray();
-        unsigned nDims = array->getNumberOfDimensions();
-        unsigned elementSize = array->getNumberOfBytesPerElement();
-        ArrayShape::ElementType elementType = array->getElementType();
+        size_t arrayInfo = globalBuffer[procStart * bufferSize + (i << 3)]; 
+        unsigned nDims = arrayInfo >> 24;
+        unsigned elementSize = arrayInfo & ((1 << 16) - 1);
+        ArrayShape::ElementType elementType = (ArrayShape::ElementType)((arrayInfo >> 16) & 0xff);
         for (uint64_t iProc = 0; iProc < _nProcs; ++iProc) {
             if (iProc == _myProcID) {
                 shapes[iProc] = array;
@@ -2263,3 +2269,4 @@ void Runtime::addWorker(uint64_t procID) {
     _workerID[procID] = _workerProc.size();
     _workerProc.push_back(procID);
 }
+

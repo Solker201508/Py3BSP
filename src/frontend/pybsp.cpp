@@ -16,8 +16,9 @@ int main(int argc, char **argv) {
 
     initBSP(&argc, &argv);
     int err = PyRun_SimpleFile(pyScript,argv[1]);
-    if (err) {
-        bsp_runtimeError("unexpected runtime error");
+    char errBuf[] = "IF NOT KNOWING THE LOCATION OF THE ERROR, PLEASE PUT YOUR CODE IN THIS TRY EXCEPT BLOCK AND RUN AGAIN TO FIND OUT WHERE THE ERROR OCCURS:\n--------------------\nimport sys\nimport traceback\ntry:\n    #PUT YOURCODE HERE\n    ...\nexcept:\n    info = sys.exc_info()\n    print('Error: ', info[1])\n    traceback.print_tb(info[2])\n--------------------\nCHECK THE .ERR FILES IF THIS DOES NOT WORK\n";
+    if (err != 0) {
+        printf("%s",errBuf);
         return -3;
     }
     fclose(pyScript);

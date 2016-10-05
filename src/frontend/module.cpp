@@ -11,6 +11,8 @@
 #include <sstream>
 #include <cmath>
 #include <sys/time.h>
+#include <ctime>
+#include <fstream>
 
 using namespace BSP;
 using namespace BSP::Algorithm;
@@ -30,37 +32,60 @@ std::map<std::string, PyObject *> futures_;
 std::map<PyObject *, std::string> futureIDs_;
 std::map<std::string, std::map<std::string, LocalArray *> > requests_;
 std::map<std::string, std::map<std::string, LocalArray *> > updates_;
-std::string scriptPos_;
+std::string scriptPos_, prevScriptPos_;
 
 Runtime *runtime_ = NULL;
 
 void bsp_getScriptPos() {
-    std::stringstream ss;
-    PyObject *param = Py_BuildValue("()");
-    PyObject *objListStack = PyObject_CallObject(traceback_formatStack_,param);
-    Py_ssize_t stackSize = PyList_GET_SIZE(objListStack);
-    for (Py_ssize_t level = 0; level < stackSize; ++level) {
-        PyObject *objStrFrame = PyList_GET_ITEM(objListStack, stackSize - 1 - level);
-        char *strFrame = NULL;
-        int ok = PyArg_Parse(objStrFrame, "s", &strFrame);
-        if (!ok) {
-            PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
-            scriptPos_ = "";
-            return;
+    prevScriptPos_ = scriptPos_;
+
+    try {
+        std::stringstream ss;
+        PyObject *param = Py_BuildValue("()");
+        PyObject *objListStack = PyObject_CallObject(traceback_formatStack_,param);
+        Py_ssize_t stackSize = PyList_GET_SIZE(objListStack);
+        for (Py_ssize_t level = 0; level < stackSize; ++level) {
+            PyObject *objStrFrame = PyList_GET_ITEM(objListStack, stackSize - 1 - level);
+            char *strFrame = NULL;
+            int ok = PyArg_Parse(objStrFrame, "s", &strFrame);
+            if (!ok) {
+                PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
+                scriptPos_ = "";
+                return;
+            }
+            ss << "#" << level << ": " << strFrame <<std::endl;
         }
-        ss << "#" << level << ": " << strFrame <<std::endl;
+        scriptPos_ =  ss.str();
+        if (scriptPos_ == "")
+            scriptPos_ = prevScriptPos_;
+    } catch (const std::exception &e) {
     }
-    scriptPos_ =  ss.str();
 }
 
 void bsp_typeError(std::string strErr) {
-    std::cerr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl
-        << scriptPos_;
+    std::time_t t = std::time(NULL);
+    char mbstr[100];
+    std::strftime(mbstr, sizeof(mbstr), "%y_%m_%d_%H_%M_%S", std::localtime(&t));
+    std::stringstream ssFileName;
+    ssFileName << "PY3BSP_" << mbstr << "_NODE_" << runtime_->getMyProcessID() << ".ERR";
+    std::ofstream myErr(ssFileName.str().c_str());
+
+    myErr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl
+        << "current pos: " << std::endl << scriptPos_ << "previous pos: " << std::endl << prevScriptPos_;
+    runtime_->abort();
 }
 
 void bsp_runtimeError(std::string strErr) {
-    std::cerr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl
-        << scriptPos_;
+    std::time_t t = std::time(NULL);
+    char mbstr[100];
+    std::strftime(mbstr, sizeof(mbstr), "%y_%m_%d_%H_%M_%S", std::localtime(&t));
+    std::stringstream ssFileName;
+    ssFileName << "PY3BSP_" << mbstr << "_NODE_" << runtime_->getMyProcessID() << ".ERR";
+    std::ofstream myErr(ssFileName.str().c_str());
+
+    myErr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl
+        << "current pos: " << std::endl << scriptPos_ << "previous pos: " << std::endl << prevScriptPos_;
+    runtime_->abort();
 }
 
 PyObject *PyRetVal(PyObject *obj) {
@@ -1477,17 +1502,22 @@ extern "C" {
             bsp_typeError("invalid arguments for bsp.globalize(procStart,gridShape,up-to-10-array-paths)");
             Py_RETURN_FALSE;
         }
-        ok = PyArg_ParseTuple(objGridShape,"k|kkkkkk:bsp.globalize.extractGridShape",
-                (unsigned long *)(gridDimSize + 0),
-                (unsigned long *)(gridDimSize + 1),
-                (unsigned long *)(gridDimSize + 2),
-                (unsigned long *)(gridDimSize + 3),
-                (unsigned long *)(gridDimSize + 4),
-                (unsigned long *)(gridDimSize + 5),
-                (unsigned long *)(gridDimSize + 6));
-        if (!ok) {
-            bsp_typeError("invalid gridShape for bsp.globalize(procStart,gridShape,up-to-10-array-paths)");
-            Py_RETURN_FALSE;
+        if (PyTuple_Check(objGridShape)) {
+            ok = PyArg_ParseTuple(objGridShape,"k|kkkkkk:bsp.globalize.extractGridShape",
+                    (unsigned long *)(gridDimSize + 0),
+                    (unsigned long *)(gridDimSize + 1),
+                    (unsigned long *)(gridDimSize + 2),
+                    (unsigned long *)(gridDimSize + 3),
+                    (unsigned long *)(gridDimSize + 4),
+                    (unsigned long *)(gridDimSize + 5),
+                    (unsigned long *)(gridDimSize + 6));
+            if (!ok) {
+                bsp_typeError("invalid gridShape for bsp.globalize(procStart,gridShape,up-to-10-array-paths)");
+                Py_RETURN_FALSE;
+            }
+        } else {
+            assert(PyLong_Check(objGridShape));
+            gridDimSize[0] = PyLong_AsLong(objGridShape);
         }
         for (unsigned iDim = 0; iDim < 7; ++iDim) {
             if (gridDimSize[iDim] > 0)
@@ -2515,11 +2545,11 @@ extern "C" {
 
     static PyObject *bsp_getFreq(PyObject *self, PyObject *args, PyObject *kwargs) {
         bsp_getScriptPos();
-        static const char * kwlist[] = {"freq", "be", "sequence", "fileName", NULL};
-        PyObject *objSeq = NULL, *objFreq = NULL, *objBE = NULL;
+        static const char * kwlist[] = {"freq", "be", "sequence", "fileName", "acc", NULL};
+        PyObject *objSeq = NULL, *objFreq = NULL, *objBE = NULL, *objAcc = NULL;
         char *strFileName = NULL;
-        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOOs: bsp.getFreq", (char **)kwlist,
-                &objFreq, &objBE, &objSeq, &strFileName);
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "OOOs|O: bsp.getFreq", (char **)kwlist,
+                &objFreq, &objBE, &objSeq, &strFileName, &objAcc);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.getFreq(freq, be, sequence, fileName)");
             Py_RETURN_FALSE;
@@ -2602,6 +2632,12 @@ extern "C" {
 
         Apriori apriori(0);
         apriori.loadFromFile(strFileName);
+        if (objAcc) {
+            if (PyObject_IsTrue(objAcc)) {
+                apriori.scan(nUnits, x, false);
+                std::cout << "HOOWEE!" << std::endl;
+            }
+        }
         apriori.getFreq(nUnits, x, freq, freq + nUnits, freq + 2 * nUnits, freq + 3 * nUnits,
                 be, be + nUnits, be + 2 * nUnits, be + 3 * nUnits,
                 be + 4 * nUnits, be + 5 * nUnits, be + 6 * nUnits, be + 7 * nUnits);
@@ -2717,6 +2753,629 @@ extern "C" {
         return PyRetVal(Py_BuildValue("k", apriori.freq((unsigned short)wi)));
     }
 
+    static PyObject *bsp_lu(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
+        static const char * kwlist[] = {"pathA", "P", "blockSize", NULL};
+        PyObject *objP = NULL;
+        char *strPathA = NULL;
+        unsigned long blockSize = 32;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "sO|k: bsp.lu", (char **)kwlist,
+                &strPathA, &objP, &blockSize);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.lu");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strPathA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+
+        GlobalArray *globalArray = nobjA->_globalArray();
+        uint64_t myProcID = runtime_->getMyProcessID();
+        if (myProcID < globalArray->getStartProcID() 
+                || myProcID >= globalArray->getStartProcID() + globalArray->getProcCount(ArrayPartition::ALL_DIMS))
+            Py_RETURN_NONE;
+
+        if (globalArray->getNumberOfDimensions() != 2 
+                || globalArray->getElementCount(0) != globalArray->getElementCount(1)) {
+            bsp_typeError("invalid shape of A");
+            Py_RETURN_NONE;
+        }
+        unsigned int n = globalArray->getElementCount(0);
+
+        PyArrayObject *numpyArray = (PyArrayObject *)objP;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        unsigned int elemSize = strides[0];
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned int nElements = dimSize[0];
+        if (!PyArray_ISINTEGER(numpyArray) || nDims != 1 || elemSize != sizeof(unsigned int) || nElements != n) {
+            bsp_typeError("invalid P for bsp.lu");
+            Py_RETURN_NONE;
+        }
+        PyRef refP(objP);
+        unsigned int *P = (unsigned int *)PyArray_BYTES(numpyArray);
+
+        try {
+            Algorithm::LU lu(globalArray, blockSize);
+            for (unsigned int i = 0; i < n; ++ i) {
+                P[i] = lu.getP(i);
+            }
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_permute(PyObject *self, PyObject *args, PyObject *kwargs) {
+        bsp_getScriptPos();
+        static const char * kwlist[] = {"pathA", "P", "dimPermute", NULL};
+        PyObject *objP = NULL;
+        char *strPathA = NULL;
+        unsigned long dimPermute = 0;
+        int ok = PyArg_ParseTupleAndKeywords(args, kwargs, "sO|k: bsp.permute", (char **)kwlist,
+                &strPathA, &objP, &dimPermute);
+        if (!ok) {
+            bsp_typeError("invalid arguments for bsp.permute");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strPathA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+
+        GlobalArray *globalArray = nobjA->_globalArray();
+        uint64_t myProcID = runtime_->getMyProcessID();
+        if (myProcID < globalArray->getStartProcID() 
+                || myProcID >= globalArray->getStartProcID() + globalArray->getProcCount(ArrayPartition::ALL_DIMS))
+            Py_RETURN_NONE;
+
+        if (globalArray->getNumberOfDimensions() <= dimPermute) {
+            bsp_typeError("invalid shape of A");
+            Py_RETURN_NONE;
+        }
+        unsigned int n = globalArray->getElementCount(dimPermute);
+
+        PyArrayObject *numpyArray = (PyArrayObject *)objP;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        unsigned int elemSize = strides[0];
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned int nElements = dimSize[0];
+        if (!PyArray_ISINTEGER(numpyArray) || nDims != 1 || elemSize != sizeof(unsigned int) || nElements != n) {
+            bsp_typeError("invalid P for bsp.permute");
+            Py_RETURN_NONE;
+        }
+        PyRef refP(objP);
+        unsigned int *P = (unsigned int *)PyArray_BYTES(numpyArray);
+
+        try {
+            globalArray->permute(dimPermute, P);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_luSolve(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL, *strB = NULL, *strC = NULL;
+        PyObject *objP = NULL;
+        int ok = PyArg_ParseTuple(args, "sOss:bsp.luSolve", &strA, &objP, &strB, &strC);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+        unsigned int n = globalArrayA->getElementCount(1);
+
+        PyArrayObject *numpyArray = (PyArrayObject *)objP;
+        npy_intp *strides = PyArray_STRIDES(numpyArray);
+        int nDims = PyArray_NDIM(numpyArray);
+        unsigned int elemSize = strides[0];
+        npy_intp *dimSize = PyArray_DIMS(numpyArray);
+        unsigned int nElements = dimSize[0];
+        if (!PyArray_ISINTEGER(numpyArray) || nDims != 1 || elemSize != sizeof(unsigned int) || nElements != n) {
+            bsp_typeError("invalid P for bsp.permute");
+            Py_RETURN_NONE;
+        }
+        PyRef refP(objP);
+        unsigned int *P = (unsigned int *)PyArray_BYTES(numpyArray);
+
+        NamedObject *nobjB = runtime_->getObject(strB);
+        if (NULL == nobjB) {
+            bsp_typeError("invalid B");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjB->getType() || !nobjB->isGlobal()) {
+            bsp_typeError("invalid B");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayB = nobjB->_globalArray();
+        if (globalArrayB->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("B is not an array of double");
+        }
+
+        NamedObject *nobjC = runtime_->getObject(strC);
+        if (NULL == nobjC) {
+            bsp_typeError("invalid C");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjC->getType() || !nobjC->isGlobal()) {
+            bsp_typeError("invalid C");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayC = nobjC->_globalArray();
+        if (globalArrayC->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("C is not an array of double");
+        }
+
+        try {
+            BSP::Algorithm::matrixMul(globalArrayA, globalArrayB, globalArrayC);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_matrixMul(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL, *strB = NULL, *strC = NULL;
+        int ok = PyArg_ParseTuple(args, "sss:bsp.matrixMul", &strA, &strB, &strC);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        try {
+            NamedObject *nobjA = runtime_->getObject(strA);
+            if (NULL == nobjA) {
+                bsp_typeError("invalid A");
+                Py_RETURN_NONE;
+            }
+            if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+                bsp_typeError("invalid A");
+                Py_RETURN_NONE;
+            }
+            GlobalArray *globalArrayA = nobjA->_globalArray();
+            if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+                bsp_typeError("A is not an array of double");
+            }
+
+            NamedObject *nobjB = runtime_->getObject(strB);
+            if (NULL == nobjB) {
+                bsp_typeError("invalid B");
+                Py_RETURN_NONE;
+            }
+            if (ARRAY != nobjB->getType() || !nobjB->isGlobal()) {
+                bsp_typeError("invalid B");
+                Py_RETURN_NONE;
+            }
+            GlobalArray *globalArrayB = nobjB->_globalArray();
+            if (globalArrayB->getElementType() != ArrayShape::DOUBLE) {
+                bsp_typeError("B is not an array of double");
+            }
+
+            NamedObject *nobjC = runtime_->getObject(strC);
+            if (NULL == nobjC) {
+                bsp_typeError("invalid C");
+                Py_RETURN_NONE;
+            }
+            if (ARRAY != nobjC->getType() || !nobjC->isGlobal()) {
+                bsp_typeError("invalid C");
+                Py_RETURN_NONE;
+            }
+            GlobalArray *globalArrayC = nobjC->_globalArray();
+            if (globalArrayC->getElementType() != ArrayShape::DOUBLE) {
+                bsp_typeError("C is not an array of double");
+            }
+
+            BSP::Algorithm::matrixMul(globalArrayA, globalArrayB, globalArrayC);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_transpose(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL, *strB = NULL;
+        int ok = PyArg_ParseTuple(args, "ss:bsp.transpose", &strA, &strB);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        try {
+            NamedObject *nobjA = runtime_->getObject(strA);
+            if (NULL == nobjA) {
+                bsp_typeError("invalid A");
+                Py_RETURN_NONE;
+            }
+            if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+                bsp_typeError("invalid A");
+                Py_RETURN_NONE;
+            }
+            GlobalArray *globalArrayA = nobjA->_globalArray();
+            if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+                bsp_typeError("A is not an array of double");
+            }
+
+            NamedObject *nobjB = runtime_->getObject(strB);
+            if (NULL == nobjB) {
+                bsp_typeError("invalid B");
+                Py_RETURN_NONE;
+            }
+            if (ARRAY != nobjB->getType() || !nobjB->isGlobal()) {
+                bsp_typeError("invalid B");
+                Py_RETURN_NONE;
+            }
+            GlobalArray *globalArrayB = nobjB->_globalArray();
+            if (globalArrayB->getElementType() != ArrayShape::DOUBLE) {
+                bsp_typeError("B is not an array of double");
+            }
+
+            BSP::Algorithm::transpose(globalArrayA, globalArrayB);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_inverse(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL, *strB = NULL;
+        int ok = PyArg_ParseTuple(args, "ss:bsp.inverse", &strA, &strB);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        NamedObject *nobjB = runtime_->getObject(strB);
+        if (NULL == nobjB) {
+            bsp_typeError("invalid B");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjB->getType() || !nobjB->isGlobal()) {
+            bsp_typeError("invalid B");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayB = nobjB->_globalArray();
+        if (globalArrayB->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("B is not an array of double");
+        }
+
+        try {
+            BSP::Algorithm::inverse(globalArrayA, globalArrayB);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        Py_RETURN_NONE;
+    }
+
+    static PyObject *bsp_trace(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.trace", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::tr(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_det(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.det", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::det(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_norm1(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.norm1", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::norm1(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_norm2(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.norm2", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::norm2(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_normInf(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.normInf", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::normInf(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_normF(PyObject *self, PyObject *args) {
+        bsp_getScriptPos();
+        char *strA = NULL;
+        int ok = PyArg_ParseTuple(args, "s:bsp.normF", &strA);
+        if (!ok) {
+            bsp_typeError("invalid arguments");
+            Py_RETURN_NONE;
+        }
+
+        NamedObject *nobjA = runtime_->getObject(strA);
+        if (NULL == nobjA) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        if (ARRAY != nobjA->getType() || !nobjA->isGlobal()) {
+            bsp_typeError("invalid A");
+            Py_RETURN_NONE;
+        }
+        GlobalArray *globalArrayA = nobjA->_globalArray();
+        if (globalArrayA->getElementType() != ArrayShape::DOUBLE) {
+            bsp_typeError("A is not an array of double");
+        }
+
+        double result = 0.0;
+        try {
+            result = BSP::Algorithm::normF(globalArrayA);
+        } catch (const std::exception &e) {
+            bsp_runtimeError(e.what());
+        }
+        return PyRetVal(Py_BuildValue("d",result));
+    }
+
+    static PyObject *bsp_testBlock(PyObject *self, PyObject *args) {
+        assert(runtime_->getNumberOfProcesses() >= 28);
+        uint64_t partDim0[2] = {9,6}; // sum0 = 15
+        uint64_t partDim1[3] = {7,5,3}; // sum1 = 15
+        uint64_t partDim2[4] = {3,5,4,3}; // sum2 = 15
+        uint64_t gridDimSize[3] = {2,3,4};
+        uint64_t procStart = 1;
+        uint64_t procCount = 24;
+        uint64_t myProcID = runtime_->getMyProcessID();
+        uint64_t iProcDim0 = (myProcID - procStart) / 12;
+        uint64_t iProcDim1 = (myProcID - procStart) % 12 / 4;
+        uint64_t iProcDim2 = (myProcID - procStart) % 4;
+        uint64_t localSize[3];
+
+        for (unsigned int iter = 1; iter <= 10; ++ iter) {
+            for (unsigned int dimDivide = 0; dimDivide < 3; ++ dimDivide) {
+                LocalArray *localArray = NULL;
+                if (myProcID >= procStart && myProcID < procStart + procCount) {
+                    localSize[0] = partDim0[iProcDim0] * iter;
+                    localSize[1] = partDim1[iProcDim1] * iter;
+                    localSize[2] = partDim2[iProcDim2] * iter;
+                    localArray = new LocalArray("a",ArrayShape::DOUBLE,sizeof(double),3,localSize);
+                } else {
+                    localArray = new LocalArray();
+                }
+                runtime_->setObject("a", localArray);
+
+                uint64_t w0 = 225 * iter * iter;
+                uint64_t w1 = 15 * iter;
+
+                std::vector<std::string> nameList;
+                nameList.push_back("a");
+                runtime_->globalize(nameList,3,gridDimSize,procStart);
+
+                if (myProcID >= procStart && myProcID < procStart + procCount) {
+                    GlobalArray *globalArray = runtime_->getObject("a@global")->_globalArray();
+
+                    uint64_t lower[3], upper[3];
+                    globalArray->getLocalRange(lower, upper);
+                    double *localData = (double *)localArray->getData();
+                    unsigned int k = 0;
+                    for (unsigned int i0 = lower[0]; i0 < upper[0]; ++ i0) {
+                        for (unsigned int i1 = lower[1]; i1 < upper[1]; ++ i1) {
+                            for (unsigned int i2 = lower[2]; i2 < upper[2]; ++ i2) {
+                                localData[k ++] = i0 * w0 + i1 * w1 + i2;
+                            }
+                        }
+                    }
+
+                    uint64_t blockWidth = 2;
+                    unsigned int nBytesInBlock = 0, localBlockCount = 0;
+                    uint64_t blockSize[3];
+                    double *myBlocks = (double *)globalArray->blockScatter(dimDivide, blockWidth, &nBytesInBlock, blockSize, &localBlockCount);
+
+                    double *currBlock = myBlocks;
+                    for (unsigned int iBlock = 0; iBlock < localBlockCount; ++ iBlock) {
+                        k = 0;
+                        for (unsigned int i0 = 0; i0 < blockSize[0]; ++ i0) {
+                            for (unsigned int i1 = 0; i1 < blockSize[1]; ++ i1) {
+                                for (unsigned int i2 = 0; i2 < blockSize[2]; ++ i2) {
+                                    currBlock[k] = -currBlock[k];
+                                    ++ k;
+                                }
+                            }
+                        }
+                        char *blockBuf = (char *)currBlock;
+                        blockBuf += nBytesInBlock;
+                        currBlock = (double *)blockBuf;
+                    }
+
+                    globalArray->blockGather(dimDivide, blockWidth, nBytesInBlock, blockSize, localBlockCount, (const char *)myBlocks);
+                    k = 0;
+                    for (unsigned int i0 = lower[0]; i0 < upper[0]; ++ i0) {
+                        for (unsigned int i1 = lower[1]; i1 < upper[1]; ++ i1) {
+                            for (unsigned int i2 = lower[2]; i2 < upper[2]; ++ i2) {
+                                assert(-localData[k ++] == i0 * w0 + i1 * w1 + i2);
+                            }
+                        }
+                    }
+
+                    if (myBlocks)
+                        delete[] (char *)myBlocks;
+                }
+
+                runtime_->privatize(nameList);
+                runtime_->deleteObject("a");
+            }
+            printf("%llu: iter = %u\n", myProcID, iter);
+        }
+        Py_RETURN_NONE;
+    }
+
 
     static PyMethodDef bspMethods_[] = {
         {"myProcID",bsp_myProcID,METH_VARARGS,"get the rank of current process"},
@@ -2751,6 +3410,18 @@ extern "C" {
         {"getFreqIndex", (PyCFunction)bsp_getFreqIndex, METH_VARARGS | METH_KEYWORDS, "get the indices of frequent sets of the words in a sequence"},
         {"mostFrequent", (PyCFunction)bsp_mostFrequent, METH_VARARGS, "get the most frequent word and its frequency"},
         {"wordFreq", (PyCFunction)bsp_wordFreq, METH_VARARGS, "get the frequency of a word"},
+        {"lu", (PyCFunction)bsp_lu, METH_VARARGS | METH_KEYWORDS, "LU factorization"},
+        {"luSolve", (PyCFunction)bsp_lu, METH_VARARGS | METH_KEYWORDS, "solve linear systems with LU factorization"},
+        {"permute", (PyCFunction)bsp_permute, METH_VARARGS | METH_KEYWORDS, "permute an array"},
+        {"matrixMul", bsp_matrixMul, METH_VARARGS, "matrix multplication"},
+        {"transpose", bsp_transpose, METH_VARARGS, "compute the transpose of a square matrix"},
+        {"trace", bsp_trace, METH_VARARGS, "compute the trace of a square matrix"},
+        {"det", bsp_det, METH_VARARGS, "compute the determinant of a square matrix"},
+        {"norm1", bsp_norm1, METH_VARARGS, "compute the norm1 of a square matrix"},
+        {"normInf", bsp_normInf, METH_VARARGS, "compute the normInf of a square matrix"},
+        {"normF", bsp_normF, METH_VARARGS, "compute the normF of a square matrix"},
+        {"norm2", bsp_norm2, METH_VARARGS, "compute the norm2 of a square matrix"},
+        {"testBlock", bsp_testBlock, METH_VARARGS, "test block"},
         //{"repeat", bsp_repeat, METH_VARARGS, "repeat an operation"},
         {NULL,NULL,0,NULL}
     };

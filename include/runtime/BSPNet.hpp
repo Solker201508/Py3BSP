@@ -59,6 +59,9 @@ namespace BSP {
         //! broadcast
         void broadcast(void *data, uint64_t length);
 
+        //! broadcast
+        void broadcast(uint64_t rootProcID, uint64_t startProcID, uint64_t nProcsInGrid, void *data, uint64_t length);
+
         //! send and receive
         void sendReceive(void *dataOut, void *dataIn, uint64_t length, uint64_t procID);
 
@@ -71,6 +74,17 @@ namespace BSP {
 
         //! all_sum_double
         void allSumDouble(double *data, uint64_t n);
+
+        // !joint_sum_double
+        void jointSumDouble(double *data, uint64_t n, uint64_t startProcID, uint64_t nProcsInGrid);
+
+        void allMaxDouble(double *data, uint64_t n);
+
+        void jointMaxDouble(double *data, uint64_t n, uint64_t startProcID, uint64_t nProcsInGrid);
+
+        void allMulDouble(double *data, uint64_t n);
+
+        void jointMulDouble(double *data, uint64_t n, uint64_t startProcID, uint64_t nProcsInGrid);
 
         /// @brief get the processor name
         /// @return processor name
@@ -91,6 +105,10 @@ namespace BSP {
         void abort();
 
         void finalize();
+
+        void debug();
+
+        void reset();
 
     protected:
         /// initializer

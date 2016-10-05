@@ -48,6 +48,11 @@ Net::~Net() {
     delete[] _bufSumDouble;
 }
 
+void Net::reset() {
+    _numberOfDataBlocksToSend = 0;
+    _numberOfDataBlocksToReceive = 0;
+}
+
 bool Net::addDataBlockToSend(void *dataBlock, uint64_t lengthOfDataBlock) {
     if (_numberOfDataBlocksToSend >= _maxNumberOfDataBlocks) {
         return false;
@@ -69,6 +74,9 @@ bool Net::addDataBlockToReceive(void *dataBlock, uint64_t lengthOfDataBlock) {
     return true;
 }
 
+void Net::debug() {
+    printf("debug:%llu,%llu\n",_numberOfDataBlocksToReceive,_numberOfDataBlocksToSend);
+}
 void Net::exchangeDataBlocksWith(uint64_t procRank) {
     if (sizeof (char) != 1)
         MPI_Abort(_communicator, 1); //pointer type not available
@@ -214,6 +222,37 @@ void Net::allGather(void *dataOut, void *dataIn, uint64_t lengthPerProc) {
             dataIn, lengthPerProc, MPI_CHAR, _communicator);
 }
 
+void Net::broadcast(uint64_t rootProcID, uint64_t startProcID, uint64_t nProcsInGrid, void *data, uint64_t length) {
+    // do nothing if it is an empty group
+    if (nProcsInGrid <= 0)
+        return;
+
+    // do nothing if I am not in the group
+    uint64_t myProcID = getProcessRank();
+    if (myProcID < startProcID || myProcID >= startProcID + nProcsInGrid)
+        return;
+
+    // create group communicator for the grid
+    MPI_Group fullGroup, newGroup;
+    MPI_Comm_group(_communicator, &fullGroup);
+    int *ranksInGroup = new int[nProcsInGrid];
+    if (NULL == ranksInGroup)
+        throw ENotEnoughMemory();
+    for (uint64_t iProc = 0; iProc < nProcsInGrid; ++iProc) {
+        ranksInGroup[iProc] = iProc + startProcID;
+    }
+    MPI_Group_incl(fullGroup, nProcsInGrid, ranksInGroup, &newGroup);
+    MPI_Comm newComm;
+    MPI_Comm_create(_communicator, newGroup, &newComm);
+
+    // broadcast in the new grid
+    MPI_Bcast(data, length, MPI_CHAR, rootProcID - startProcID, newComm);
+
+    // release the new grid
+    MPI_Comm_free(&newComm);
+    delete[] ranksInGroup;
+}
+
 void Net::jointGather(void* dataOut, void* dataIn, uint64_t lengthPerProc,
         uint64_t startProcID, uint64_t nProcsInGrid) {
     // do nothing if it is an empty group
@@ -269,13 +308,255 @@ void Net::allSumDouble(double *data, uint64_t n) {
         }
 
         int myN = (int)(n & (iBound - 1));
-        double *myData = data + (myM << 20);
-        for (int i = 0; i < myN; ++ i) {
-            _bufSumDouble[i] = myData[i];
-            myData[i] = 0.0;
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_SUM, _communicator);
         }
-        MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_SUM, _communicator);
     }
+}
+
+void Net::jointSumDouble(double *data, uint64_t n,
+        uint64_t startProcID, uint64_t nProcsInGrid) {
+    // do nothing if it is an empty group
+    if (nProcsInGrid <= 0)
+        return;
+
+    // do nothing if I am not in the group
+    uint64_t myProcID = getProcessRank();
+    if (myProcID < startProcID || myProcID >= startProcID + nProcsInGrid)
+        return;
+
+    // create group communicator for the grid
+    MPI_Group fullGroup, newGroup;
+    MPI_Comm_group(_communicator, &fullGroup);
+    int *ranksInGroup = new int[nProcsInGrid];
+    if (NULL == ranksInGroup)
+        throw ENotEnoughMemory();
+    for (uint64_t iProc = 0; iProc < nProcsInGrid; ++iProc) {
+        ranksInGroup[iProc] = iProc + startProcID;
+    }
+    MPI_Group_incl(fullGroup, nProcsInGrid, ranksInGroup, &newGroup);
+    MPI_Comm newComm;
+    MPI_Comm_create(_communicator, newGroup, &newComm);
+
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_SUM, newComm);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_SUM, newComm);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_SUM, newComm);
+        }
+    }
+
+    // release the new grid
+    MPI_Comm_free(&newComm);
+    delete[] ranksInGroup;
+}
+
+void Net::allMaxDouble(double *data, uint64_t n) {
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_MAX, _communicator);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_MAX, _communicator);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_MAX, _communicator);
+        }
+    }
+}
+
+void Net::jointMaxDouble(double *data, uint64_t n,
+        uint64_t startProcID, uint64_t nProcsInGrid) {
+    // do nothing if it is an empty group
+    if (nProcsInGrid <= 0)
+        return;
+
+    // do nothing if I am not in the group
+    uint64_t myProcID = getProcessRank();
+    if (myProcID < startProcID || myProcID >= startProcID + nProcsInGrid)
+        return;
+
+    // create group communicator for the grid
+    MPI_Group fullGroup, newGroup;
+    MPI_Comm_group(_communicator, &fullGroup);
+    int *ranksInGroup = new int[nProcsInGrid];
+    if (NULL == ranksInGroup)
+        throw ENotEnoughMemory();
+    for (uint64_t iProc = 0; iProc < nProcsInGrid; ++iProc) {
+        ranksInGroup[iProc] = iProc + startProcID;
+    }
+    MPI_Group_incl(fullGroup, nProcsInGrid, ranksInGroup, &newGroup);
+    MPI_Comm newComm;
+    MPI_Comm_create(_communicator, newGroup, &newComm);
+
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_MAX, newComm);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_MAX, newComm);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_MAX, newComm);
+        }
+    }
+
+    // release the new grid
+    MPI_Comm_free(&newComm);
+    delete[] ranksInGroup;
+}
+
+void Net::allMulDouble(double *data, uint64_t n) {
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_PROD, _communicator);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_PROD, _communicator);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_PROD, _communicator);
+        }
+    }
+}
+
+void Net::jointMulDouble(double *data, uint64_t n, uint64_t startProcID, uint64_t nProcsInGrid) {
+    // do nothing if it is an empty group
+    if (nProcsInGrid <= 0)
+        return;
+
+    // do nothing if I am not in the group
+    uint64_t myProcID = getProcessRank();
+    if (myProcID < startProcID || myProcID >= startProcID + nProcsInGrid)
+        return;
+
+    // create group communicator for the grid
+    MPI_Group fullGroup, newGroup;
+    MPI_Comm_group(_communicator, &fullGroup);
+    int *ranksInGroup = new int[nProcsInGrid];
+    if (NULL == ranksInGroup)
+        throw ENotEnoughMemory();
+    for (uint64_t iProc = 0; iProc < nProcsInGrid; ++iProc) {
+        ranksInGroup[iProc] = iProc + startProcID;
+    }
+    MPI_Group_incl(fullGroup, nProcsInGrid, ranksInGroup, &newGroup);
+    MPI_Comm newComm;
+    MPI_Comm_create(_communicator, newGroup, &newComm);
+
+    if ((n >> 20) == 0) {
+        int myN = (int)n;
+        for (int i = 0; i < myN; ++ i) {
+            _bufSumDouble[i] = data[i];
+            data[i] = 0.0;
+        }
+        MPI_Allreduce(_bufSumDouble, data, myN, MPI_DOUBLE, MPI_PROD, newComm);
+    } else {
+        uint64_t myM = n >> 20;
+        int iBound = 1 << 20;
+        for (uint64_t k = 0; k < myM; ++ k) {
+            double *myData = data + (k << 20);
+            for (int i = 0; i < iBound; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, iBound, MPI_DOUBLE, MPI_PROD, newComm);
+        }
+
+        int myN = (int)(n & (iBound - 1));
+        if (myN > 0) {
+            double *myData = data + (myM << 20);
+            for (int i = 0; i < myN; ++ i) {
+                _bufSumDouble[i] = myData[i];
+                myData[i] = 0.0;
+            }
+            MPI_Allreduce(_bufSumDouble, myData, myN, MPI_DOUBLE, MPI_PROD, newComm);
+        }
+    }
+
+    // release the new grid
+    MPI_Comm_free(&newComm);
+    delete[] ranksInGroup;
 }
 
 uint64_t Net::probe() {

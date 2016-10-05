@@ -54,6 +54,7 @@ orig._numberOfElementsAlongDimension) {
 
 LocalArray::LocalArray() : ArrayShape() {
     _registration = NULL;
+    _data = NULL;
 }
 
 /// @brief destructor
