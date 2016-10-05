@@ -30,6 +30,7 @@ namespace BSP {
                 ~LU();
                 unsigned int getP(unsigned int i);
                 bool isPOdd();
+                void solve(GlobalArray *Y, GlobalArray *X);
         };
     }
 }

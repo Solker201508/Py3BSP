@@ -19,8 +19,9 @@ aux_source_directory( src/runtime DIR_RUNTIME )
 aux_source_directory( src/frontend DIR_FRONTEND )
 add_executable( py3bsp ${DIR_FRONTEND} ${DIR_RUNTIME} )
 
+find_path( OS_INC stdio.h PATHS /usr/include /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.11.sdk/usr/include )
 find_path( MPI_INC mpi.h PATHS /usr/include /usr/include/mpi /usr/local/include /usr/local/include/mpi /usr/local/mpi3-dynamic/include /public/soft/openmpi143-gnu/include)
-include_directories( include/frontend include/runtime ${MPI_INC} ${PYTHON3_INC} ${NUMPY_INC} )
+include_directories( include/frontend include/runtime ${OS_INC} ${MPI_INC} ${PYTHON3_INC} ${NUMPY_INC} )
 
 find_library( MPI_LIB NAMES mpi PATHS /usr/local/mpi3-dynamic/lib /usr/local/lib /usr/lib /public/soft/openmpi143-gnu/lib )
 find_library( MPICXX_LIB NAMES mpi_cxx mpicxx PATHS /usr/local/mpi3-dynamic/lib /usr/local/lib /usr/lib /public/soft/openmpi143-gnu/lib )

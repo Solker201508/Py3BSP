@@ -220,3 +220,217 @@ bool LU::isPOdd() {
     return _oddPermutation;
 }
 
+void LU::solve(GlobalArray *Y, GlobalArray *X) {
+    assert(Y != NULL && X != NULL);
+    assert(Y->getNumberOfDimensions() == X->getNumberOfDimensions());
+    assert(Y->getElementType() == ArrayShape::DOUBLE && X->getElementType() == ArrayShape::DOUBLE);
+    unsigned int nDimsX = X->getNumberOfDimensions();
+    uint64_t m = _globalArray->getElementCount(0);
+    uint64_t n = _globalArray->getElementCount(1);
+    assert(m == n);
+    assert(X->getElementCount(0) == n);
+    assert(Y->getElementCount(0) == m);
+    for (unsigned int iDim = 1; iDim < nDimsX; ++ iDim) {
+        assert(X->getElementCount(iDim) == Y->getElementCount(iDim));
+    }
+
+    unsigned int* Q = new unsigned int[n];
+    for (unsigned int i = 0; i < n; ++ i) {
+        Q[_P[i]] = i;
+    }
+    for (unsigned int i = 0; i < n; ++ i) {
+        assert(_P[Q[i]] == i);
+    }
+
+    uint64_t procStart = _globalArray->getStartProcID();
+    uint64_t procCount = _globalArray->getProcCount(ArrayPartition::ALL_DIMS);
+    assert (X->getStartProcID() == procStart && X->getProcCount(ArrayPartition::ALL_DIMS) == procCount 
+            && Y->getStartProcID() == procStart && Y->getProcCount(ArrayPartition::ALL_DIMS) == procCount);
+    uint64_t myProcID = Runtime::getActiveRuntime()->getMyProcessID();
+    if (myProcID < procStart || myProcID >= procStart + procCount)
+        return;
+
+    Net *nal = Runtime::getActiveRuntime()->getNAL();
+    uint64_t localM = _blockSize[0];
+
+    unsigned int nBytesInBlockX;
+    uint64_t blockSizeX[7];
+    unsigned int nLocalBlocksX;
+    Y->permute(0, _P);
+    double *localBlockX = (double *)Y->blockScatter(0, localM, &nBytesInBlockX, blockSizeX, &nLocalBlocksX);
+    uint64_t nInner = 1;
+    for (unsigned int iDim = 1; iDim < nDimsX; ++ iDim) {
+        nInner *= blockSizeX[iDim];
+    }
+    unsigned int nElementsInBlockX = nBytesInBlockX / sizeof(double);
+    unsigned int nElementsImBlockLU = _nBytesInBlock / sizeof(double);
+
+    double *temp = new double[nBytesInBlockX];
+    uint64_t myIProc = myProcID - procStart;
+    unsigned int nBlocks = (n + localM - 1) / localM;
+    for (unsigned int iBlock = 0; iBlock < nBlocks; ++ iBlock) {
+        unsigned int jOffset = iBlock * localM;
+        unsigned int j0 = jOffset;
+        unsigned int j1 = j0 + localM;
+        if (j0 == 0)
+            j0 = 1;
+        if (j1 > n)
+            j1 = n;
+        unsigned int myJ0 = j0 % localM;
+        unsigned int myJ1 = j1 % localM;
+
+        if (iBlock % procCount == myIProc) {
+            unsigned int iLocalBlock = iBlock / procCount;
+            double *blockLU = _localBlock + iLocalBlock * nElementsImBlockLU;
+            double *blockX = localBlockX + iLocalBlock * nElementsInBlockX;
+            if (nDimsX == 1) {
+                for (unsigned int myJ = myJ0; myJ < myJ1; ++ myJ) {
+                    double *rowLU = blockLU + myJ * n;
+                    unsigned int j = myJ + jOffset;
+                    for (unsigned int myI = myJ; myI < myJ1; ++ myI) {
+                        blockX[myI] -= rowLU[j - 1] * blockX[myJ - 1];
+                        rowLU += n;
+                    }
+                }
+            } else {
+                for (unsigned int myJ = myJ0; myJ < myJ1; ++ myJ) {
+                    double *rowLU = blockLU + myJ * n;
+                    double *src = blockX + (myJ - 1) * nInner;
+                    unsigned int j = myJ + jOffset;
+                    for (unsigned int myI = myJ; myI < myJ1; ++ myI) {
+                        double *dst = blockX + myI * nInner;
+                        double w = rowLU[j - 1];
+#pragma omp parallel for schedule(dynamic)
+                        for (unsigned int iInner = 0; iInner < nInner; ++ iInner) {
+                            dst[iInner] -= w * src[iInner];
+                        }
+                        rowLU += n;
+                    }
+                }
+            }
+            memcpy(temp, blockX, nBytesInBlockX);
+        }
+
+        nal->broadcast(iBlock % procCount, procStart, procCount, temp, nBytesInBlockX);
+        unsigned int iLocalBlock0 = iBlock % procCount + (myIProc <= iBlock % procCount ? 1 : 0);
+        for (unsigned int iLocalBlock = iLocalBlock0; iLocalBlock < nLocalBlocksX; ++ iLocalBlock) {
+            double *blockLU = _localBlock + iLocalBlock * nElementsImBlockLU;
+            double *blockX = localBlockX + iLocalBlock * nElementsInBlockX;
+            unsigned int myI1 = (iLocalBlock * procCount + myIProc + 1 >= nBlocks) ? n % localM : localM;
+            if (nDimsX == 1) {
+#pragma omp parallel for schedule(dynamic)
+                for (unsigned int myI = 0; myI < myI1; ++ myI) {
+                    double *rowLU = blockLU + myI * n;
+                    double value = 0.0;
+                    for (unsigned int myJ = 0; myJ < myJ1; ++ myJ) {
+                        value += rowLU[myJ + jOffset] * temp[myJ];
+                    }
+                    blockX[myI] -= value;
+                }
+            } else {
+                for (unsigned int myI = 0; myI < myI1; ++ myI) {
+                    double *rowLU = blockLU + myI * n;
+#pragma omp parallel for schedule(dynamic)
+                    for (unsigned int iInner = 0; iInner < nInner; ++ iInner) {
+                        double value = 0.0;
+                        unsigned int offsetInner = iInner;
+                        for (unsigned int myJ = 0; myJ < myJ1; ++ myJ) {
+                            value += rowLU[myJ + jOffset] * temp[offsetInner];
+                            offsetInner += nInner;
+                        }
+                        blockX[myI * nInner + iInner] -= value;
+                    }
+                }
+            }
+        }
+    }
+
+    for (int iBlock = nBlocks - 1; iBlock >= 0; -- iBlock) {
+        int jOffset = iBlock * localM;
+        int j0 = jOffset;
+        int j1 = j0 + localM;
+        if (j1 > n)
+            j1 = n;
+        int myJ0 = j0 % localM;
+        int myJ1 = j1 % localM;
+
+        if (iBlock % procCount == myIProc) {
+            int iLocalBlock = iBlock / procCount;
+            double *blockLU = _localBlock + iLocalBlock * nElementsImBlockLU;
+            double *blockX = localBlockX + iLocalBlock * nElementsInBlockX;
+            if (nDimsX == 1) {
+                for (int myJ = myJ1 - 1; myJ >= myJ0; -- myJ) {
+                    double *rowLU = blockLU + myJ * n;
+                    int j = myJ + jOffset;
+                    blockX[myJ] /= rowLU[j];
+                    for (int myI = 0; myI < myJ; ++ myI) {
+                        blockX[myI] -= rowLU[j] * blockX[myJ];
+                    }
+                }
+            } else {
+                for (int myJ = myJ1 - 1; myJ >= myJ0; -- myJ) {
+                    double *rowLU = blockLU + myJ * n;
+                    double *src = blockX + myJ * nInner;
+                    int j = myJ + jOffset;
+#pragma omp parallel for schedule(dynamic)
+                    for (unsigned int iInner = 0; iInner < nInner; ++ iInner) {
+                        src[iInner] /= rowLU[j];
+                    }
+
+                    for (unsigned int myI = 0; myI < myJ; ++ myI) {
+                        double *dst = blockX + myI * nInner;
+                        double w = rowLU[j];
+#pragma omp parallel for schedule(dynamic)
+                        for (unsigned int iInner = 0; iInner < nInner; ++ iInner) {
+                            dst[iInner] -= w * src[iInner];
+                        }
+                        rowLU += n;
+                    }
+                }
+            }
+            memcpy(temp, blockX, nBytesInBlockX);
+        }
+
+        nal->broadcast(iBlock % procCount, procStart, procCount, temp, nBytesInBlockX);
+        unsigned int iLocalBlock1 = iBlock % procCount + (myIProc >= iBlock % procCount ? 0 : 1);
+        for (unsigned int iLocalBlock = 0; iLocalBlock < iLocalBlock1; ++ iLocalBlock) {
+            double *blockLU = _localBlock + iLocalBlock * nElementsImBlockLU;
+            double *blockX = localBlockX + iLocalBlock * nElementsInBlockX;
+            unsigned int myI1 = (iLocalBlock * procCount + myIProc + 1 >= nBlocks) ? n % localM : localM;
+            if (nDimsX == 1) {
+#pragma omp parallel for schedule(dynamic)
+                for (unsigned int myI = 0; myI < myI1; ++ myI) {
+                    double *rowLU = blockLU + myI * n;
+                    double value = 0.0;
+                    for (unsigned int myJ = 0; myJ < myJ1; ++ myJ) {
+                        value += rowLU[myJ + jOffset] * temp[myJ];
+                    }
+                    blockX[myI] -= value;
+                }
+            } else {
+                for (unsigned int myI = 0; myI < myI1; ++ myI) {
+                    double *rowLU = blockLU + myI * n;
+#pragma omp parallel for schedule(dynamic)
+                    for (unsigned int iInner = 0; iInner < nInner; ++ iInner) {
+                        double value = 0.0;
+                        unsigned int offsetInner = iInner;
+                        for (unsigned int myJ = 0; myJ < myJ1; ++ myJ) {
+                            value += rowLU[myJ + jOffset] * temp[offsetInner];
+                            offsetInner += nInner;
+                        }
+                        blockX[myI * nInner + iInner] -= value;
+                    }
+                }
+            }
+        }
+    }
+
+    X->blockGather(0, localM, nBytesInBlockX, blockSizeX, nLocalBlocksX, (char *)localBlockX);
+
+    Y->permute(0, Q);
+    delete[] Q;
+    delete[] temp;
+    if (localBlockX)
+        delete[] localBlockX;
+}
+
