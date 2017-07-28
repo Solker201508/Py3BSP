@@ -10,8 +10,7 @@ i0 = myProcID / n1Dim
 i1 = myProcID % n1Dim
 
 # create the local parts of the global array
-bsp.createArray('arr.a1','f8',[10,10])
-a1=bsp.asNumpy('arr.a1')
+a1=bsp.array('arr.a1','f8',[10,10])
 for i in range(10):
     for j in range(10):
         a1[i][j] = i0+i1+i+j
@@ -24,8 +23,7 @@ inds1=bsp.createRegionSet(([[5,5],[2,0]],[[14,14],[11,9]]))
 #inds1=bsp.createPointSet('ind.lower1')
 
 # create a local array to store the update data
-bsp.createArray('arr.a2','f8',[2,10,10])
-a2=bsp.asNumpy('arr.a2')
+a2=bsp.array('arr.a2','f8',[2,10,10])
 for i in range(2):
     for j in range(10):
         for k in range(10):

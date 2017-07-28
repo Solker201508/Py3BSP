@@ -11,6 +11,7 @@
 #include "BSPGlobalRequest.hpp"
 #include "BSPLocalRequest.hpp"
 #include "BSPException.hpp"
+#include <iostream>
 using namespace BSP;
 
 ArrayRegistration::ArrayRegistration(Grid &grid, ArrayShape **localArrayRef) :

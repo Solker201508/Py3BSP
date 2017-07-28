@@ -1,6 +1,11 @@
 #include "module.hpp"
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+// python headers
+#include <frameobject.h>
+#include <code.h>
+#include <pyerrors.h>
 #include <numpy/arrayobject.h>
+// other headers
 #include "BSP.hpp"
 #include <cassert>
 #include <string>
@@ -32,35 +37,38 @@ std::map<std::string, PyObject *> futures_;
 std::map<PyObject *, std::string> futureIDs_;
 std::map<std::string, std::map<std::string, LocalArray *> > requests_;
 std::map<std::string, std::map<std::string, LocalArray *> > updates_;
-std::string scriptPos_, prevScriptPos_;
+bool bspErr_ = false;
 
 Runtime *runtime_ = NULL;
 
-void bsp_getScriptPos() {
-    prevScriptPos_ = scriptPos_;
-
-    try {
-        std::stringstream ss;
-        PyObject *param = Py_BuildValue("()");
-        PyObject *objListStack = PyObject_CallObject(traceback_formatStack_,param);
-        Py_ssize_t stackSize = PyList_GET_SIZE(objListStack);
-        for (Py_ssize_t level = 0; level < stackSize; ++level) {
-            PyObject *objStrFrame = PyList_GET_ITEM(objListStack, stackSize - 1 - level);
-            char *strFrame = NULL;
-            int ok = PyArg_Parse(objStrFrame, "s", &strFrame);
-            if (!ok) {
-                PyErr_SetString(PyExc_RuntimeError, "error occured when parsing stack frames in bsp.getScriptPos");
-                scriptPos_ = "";
-                return;
-            }
-            ss << "#" << level << ": " << strFrame <<std::endl;
-        }
-        scriptPos_ =  ss.str();
-        if (scriptPos_ == "")
-            scriptPos_ = prevScriptPos_;
-    } catch (const std::exception &e) {
+std::string codeFileName(PyCodeObject *code) {
+    char *fileName=NULL;
+    int ok = PyArg_Parse(code->co_filename,"s",&fileName);
+    if (ok && fileName!=NULL) {
+        return fileName;
+    } else {
+        return "UNKNOWN FILE";
     }
 }
+
+std::string frameToString(PyFrameObject *frame) {
+    std::stringstream ss;
+
+    int frameLevel=0;
+    PyCodeObject *code=frame->f_code;
+    int lineno = frame->f_lineno;
+    ss << "#" << frameLevel << "\t|" << codeFileName(code) << ": " << lineno << std::endl;
+
+    PyFrameObject *back = frame->f_back;
+    while (back != NULL) {
+        code=back->f_code;
+        lineno=back->f_lineno;
+        ss << "#" << frameLevel << "\t|" << codeFileName(code) << ": " << lineno << std::endl;
+        back=back->f_back;
+    }
+    return ss.str();
+}
+
 
 void bsp_typeError(std::string strErr) {
     std::time_t t = std::time(NULL);
@@ -70,9 +78,16 @@ void bsp_typeError(std::string strErr) {
     ssFileName << "PY3BSP_" << mbstr << "_NODE_" << runtime_->getMyProcessID() << ".ERR";
     std::ofstream myErr(ssFileName.str().c_str());
 
-    myErr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl
-        << "current pos: " << std::endl << scriptPos_ << "previous pos: " << std::endl << prevScriptPos_;
-    runtime_->abort();
+    myErr << runtime_->getMyProcessID() << ": TypeErr : " << strErr << std::endl;
+
+    bspErr_ = true;
+    char locBuf[32];
+    int myProcID = (int)runtime_->getMyProcessID();
+    sprintf(locBuf,"proc %8d :",myProcID);
+    strErr=locBuf+strErr;
+    PyErr_SetString(PyExc_TypeError,strErr.c_str()); 
+    PyErr_Print();
+    bspErr_ = false;
 }
 
 void bsp_runtimeError(std::string strErr) {
@@ -83,9 +98,14 @@ void bsp_runtimeError(std::string strErr) {
     ssFileName << "PY3BSP_" << mbstr << "_NODE_" << runtime_->getMyProcessID() << ".ERR";
     std::ofstream myErr(ssFileName.str().c_str());
 
-    myErr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl
-        << "current pos: " << std::endl << scriptPos_ << "previous pos: " << std::endl << prevScriptPos_;
-    runtime_->abort();
+    bspErr_ = true;
+    char locBuf[32];
+    int myProcID = (int)runtime_->getMyProcessID();
+    sprintf(locBuf,"proc %8d :",myProcID);
+    strErr=locBuf+strErr;
+    myErr << runtime_->getMyProcessID() << ": RuntimeErr : " << strErr << std::endl;
+    PyErr_SetString(PyExc_RuntimeError,strErr.c_str()); 
+    bspErr_ = false;
 }
 
 PyObject *PyRetVal(PyObject *obj) {
@@ -182,7 +202,6 @@ extern "C" {
     }
 
     static PyObject *Dim_init(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *objThis = NULL;
         unsigned long dimSize = 0;
         int ok = PyArg_ParseTuple(args, "Ok:Dim.init", &objThis, &dimSize);
@@ -279,7 +298,6 @@ extern "C" {
     }
 
     static PyObject *Dim_getItem(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *objSelf = NULL, *objIndex = NULL;
         int ok = PyArg_ParseTuple(args, "OO", &objSelf, &objIndex);
         if (!ok) {
@@ -460,7 +478,6 @@ extern "C" {
     }
 
     static PyObject *Future_init(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         unsigned long procID = 0;
         char *varName = NULL;
         char *op = NULL;
@@ -595,7 +612,6 @@ extern "C" {
     }
 
     static PyObject *Future_getItem(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *objSelf = NULL, *objIndex = NULL;
         int ok = PyArg_ParseTuple(args, "OO", &objSelf, &objIndex);
         if (!ok) {
@@ -693,17 +709,17 @@ extern "C" {
             clientArray = iter->second;
         }
 
+        PyFrameObject *frame = PyEval_GetFrame();
         if (nobjServer->isGlobal()) {
-            runtime_->requestFrom(*nobjServer->_globalArray(), *indexSet, *clientArray, scriptPos_);
+            runtime_->requestFrom(*nobjServer->_globalArray(), *indexSet, *clientArray, frameToString(frame));
         } else {
-            runtime_->requestFrom(*nobjServer->_localArray(), procID, *indexSet, *clientArray, scriptPos_);
+            runtime_->requestFrom(*nobjServer->_localArray(), procID, *indexSet, *clientArray, frameToString(frame));
         }
         delete indexSet;
         return localArrayAsNumpy(clientArray);
     }
 
     static PyObject *Future_setItem(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *objSelf = NULL, *objIndex = NULL, *objValue = NULL;
         int ok = PyArg_ParseTuple(args, "OOO", &objSelf, &objIndex, &objValue);
         if (!ok) {
@@ -814,11 +830,12 @@ extern "C" {
             Py_RETURN_NONE;
         }
 
+        PyFrameObject *frame=PyEval_GetFrame();
         if (!requested) {
             if (nobjServer->isGlobal()) {
-                runtime_->requestTo(*nobjServer->_globalArray(), *indexSet, *clientArray, opID, scriptPos_);
+                runtime_->requestTo(*nobjServer->_globalArray(), *indexSet, *clientArray, opID, frameToString(frame));
             } else {
-                runtime_->requestTo(*nobjServer->_localArray(), procID, *indexSet, *clientArray, opID, scriptPos_);
+                runtime_->requestTo(*nobjServer->_localArray(), procID, *indexSet, *clientArray, opID, frameToString(frame));
             }
         }
         delete indexSet;
@@ -863,7 +880,6 @@ extern "C" {
 
     // myProcID = bsp.myProcID()
     static PyObject *bsp_myProcID(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         int ok = PyArg_ParseTuple(args,":bsp.myProcID");
         if (!ok) {
             bsp_typeError("bsp.myProcID requires no arguments");
@@ -875,7 +891,6 @@ extern "C" {
 
     // procCount = bsp.procCount()
     static PyObject *bsp_procCount(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         int ok = PyArg_ParseTuple(args,":bsp.procCount");
         if (!ok) {
             bsp_typeError("bsp.procCount requires no arguments");
@@ -886,7 +901,6 @@ extern "C" {
 
     // importedFromProcID = bsp.fromProc(procID)
     static PyObject *bsp_fromProc(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         long procID;
         int ok = PyArg_ParseTuple(args,"l:bsp.fromProc", &procID);
         if (!ok) {
@@ -902,7 +916,6 @@ extern "C" {
 
     // OK = bsp.fromObject(object,arrayPath)
     static PyObject *bsp_fromObject(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromObject",&input,&path);
@@ -971,7 +984,6 @@ extern "C" {
 
     // OK = bsp.fromNumpy(numpyArray,arrayPath)
     static PyObject *bsp_fromNumpy(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *input = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"Os:bsp.fromNumpy",&input,&path);
@@ -994,7 +1006,6 @@ extern "C" {
 
     // object = bsp.toObject(arrayPath)
     static PyObject *bsp_toObject(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *output = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.toObject",&path);
@@ -1024,7 +1035,6 @@ extern "C" {
 
     // numpyArray = bsp.toNumpy(arrayPath)
     static PyObject *bsp_toNumpy(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *output = NULL;
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.toNumpy",&path);
@@ -1100,7 +1110,6 @@ extern "C" {
 
     // numpyArray = bsp.asNumpy(arrayPath)
     static PyObject *bsp_asNumpy(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *path = NULL;
         int ok = PyArg_ParseTuple(args,"s:bsp.asNumpy",&path);
         if (!ok) {
@@ -1110,22 +1119,22 @@ extern "C" {
         return arrayAsNumpy(path);
     }
 
-    // OK = bsp.array(arrayPath,dtype,arrayShape)
+    // NUMPY_ARRAY = bsp.array(arrayPath,dtype,arrayShape)
     static PyObject *bsp_array(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"path", "shape", "dtype", "fill", NULL};
         char *arrayPath = NULL;
         char *dtype = NULL;
         PyObject *arrayShape = NULL;
         uint64_t dimSize[7] = {0,0,0,0,0,0,0};
         double fill = sqrt(-1);
-        int ok = PyArg_ParseTupleAndKeywords(args,kwargs,"sO|sd:bsp.array",(char **)kwlist,&arrayPath,&arrayShape,&dtype,&fill);
+        int ok = PyArg_ParseTupleAndKeywords(args,kwargs,"ssO|ssd:bsp.array",(char **)kwlist,&arrayPath,&dtype,&arrayShape,&fill);
 
         PyRef refArrayShape(arrayShape);
         if (!ok) {
             bsp_typeError("invalid arguments for bsp.array(arrayPath,arrayShape)");
             Py_RETURN_FALSE;
         }
+
         if (PyTuple_Check(arrayShape)) {
             ok = PyArg_ParseTuple(arrayShape,"k|kkkkkk:bsp.array.extractArrayShape",
                     (unsigned long *)(dimSize + 0),
@@ -1404,7 +1413,6 @@ extern "C" {
 
     // OK = bsp.delete(up-to-10-paths)
     static PyObject *bsp_delete(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         PyObject *obj[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "O|OOOOOOOOO:bsp.delete",
                 obj + 0,
@@ -1444,7 +1452,6 @@ extern "C" {
 
     // OK = bsp.share(up-to-10-array-Paths)
     static PyObject *bsp_share(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "s|sssssssss:bsp.share",
                 path + 0,
@@ -1478,7 +1485,6 @@ extern "C" {
 
     // OK = bsp.globalize(procStart,gridShape,up-to-10-array-Paths)
     static PyObject *bsp_globalize(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         uint64_t procStart = 0;
         PyObject *objGridShape = NULL;
         uint64_t gridDimSize[7] = {0,0,0,0,0,0,0};
@@ -1542,7 +1548,6 @@ extern "C" {
 
     // OK = bsp.privatize(up-to-10-array-paths)
     static PyObject *bsp_privatize(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args,"s|sssssssss:bsp.privatize",
                 path + 0,
@@ -1576,7 +1581,6 @@ extern "C" {
 
     // OK = bsp.toProc(procID,up-to-10-local-arrays)
     static PyObject *bsp_toProc(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         unsigned long procID = 0;
         char *path[10] = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
         int ok = PyArg_ParseTuple(args, "ks|sssssssss:bsp.toProc",
@@ -1633,7 +1637,6 @@ extern "C" {
 
     // OK = bsp.sync(tag,optionalSendMatrix)
     static PyObject *bsp_sync(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *tag = NULL;
         PyObject *objSendMatrix = NULL;
         int ok = PyArg_ParseTuple(args, "s|O:bsp.sync", &tag, &objSendMatrix);
@@ -1722,7 +1725,6 @@ extern "C" {
 
     // {partnerID1, ..., partnerIDk} = bsp.async(tag, optionalStopping)
     static PyObject *bsp_async(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *tag = NULL;
         PyObject *option = NULL;
         bool stopping = false;
@@ -1782,7 +1784,6 @@ extern "C" {
 
     // bsp.addWorker(procID)
     static PyObject *bsp_addWorker(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         unsigned int procID = runtime_->getMyProcessID();
         int ok = PyArg_ParseTuple(args, "I:bsp.addWorker", &procID);
         if (!ok) {
@@ -1799,7 +1800,6 @@ extern "C" {
 
     // bsp.setScheduler(boundOfDelay, smallestBatch, largestBatch)
     static PyObject *bsp_setScheduler(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         unsigned int boundOfDelay = 0, smallestBatch = 0, largestBatch = 0;
         int ok = PyArg_ParseTuple(args, "I|II:bsp.setScheduler", &boundOfDelay, &smallestBatch, &largestBatch);
         if (!ok) {
@@ -1816,7 +1816,6 @@ extern "C" {
 
     // bsp.unsetScheduler()
     static PyObject *bsp_unsetScheduler(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         try {
             runtime_->unsetScheduler();
         } catch (const std::exception & e) {
@@ -1827,7 +1826,6 @@ extern "C" {
 
     // bsp.enableScheduler()
     static PyObject *bsp_enableScheduler(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         try {
             runtime_->enableScheduler();
         } catch (const std::exception & e) {
@@ -1838,7 +1836,6 @@ extern "C" {
 
     // bsp.disableScheduler()
     static PyObject *bsp_disableScheduler(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         try {
             runtime_->disableScheduler();
         } catch (const std::exception & e) {
@@ -1849,21 +1846,18 @@ extern "C" {
 
     // bsp.toggleVerbose()
     static PyObject *bsp_toggleVerbose(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
 	runtime_->setVerbose(!runtime_->isVerbose());
 	Py_RETURN_NONE;
     }
 
     // bsp.tic()
     static PyObject *bsp_tic(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         gettimeofday(&tvStart_, NULL);
 	Py_RETURN_NONE;
     }
 
     // bsp.toc()
     static PyObject *bsp_toc(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         gettimeofday(&tvStop_, NULL);
         double result = tvStop_.tv_sec - tvStart_.tv_sec + 1e-6 * (tvStop_.tv_usec - tvStart_.tv_usec);
         return PyRetVal(Py_BuildValue("d",result));
@@ -1871,7 +1865,6 @@ extern "C" {
 
     // bsp.minimize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_minimize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
@@ -2118,7 +2111,6 @@ extern "C" {
 
     // bsp.maximize(params, funValue, funGradient, optMaxIter, optMLim, optStrPenalty, optMethod, optPenaltyLevel)
     static PyObject *bsp_maximize(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"params", "funValue", "funGradient", "maxIter", "mLim", "penalty", "method", "penaltyLevel", "concensus", "concensusRange", "parallel", NULL};
         PyObject *objParam = NULL, *objFunValue = NULL, *objFunGradient = NULL, *objCoParams = NULL, *objCoMultipliers = NULL, *objParallel = NULL;
         unsigned long kMaxIter = 1000, kMLim = 20;
@@ -2369,7 +2361,6 @@ extern "C" {
     }
 
     static PyObject *bsp_concensus(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"nParamsPerWorker", "nWorkers", "params", "multipliers", "center", "centerLevel", "proximityLevel", NULL};
         PyObject *objCoParams = NULL, *objCoMultipliers = NULL, *objParam = NULL;
         unsigned long nParamsPerWorker = 0, nWorkers = 0;
@@ -2485,7 +2476,6 @@ extern "C" {
 
     // bsp.findFreqSet(sequence, fileName, optTemplate, optThreshold)
     static PyObject *bsp_findFreqSet(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"sequence", "fileName", "threshold", "tmpl2", "tmpl3", "multiThread", NULL};
         PyObject *objSeq = NULL;
         char *strFileName = NULL;
@@ -2544,7 +2534,6 @@ extern "C" {
     }
 
     static PyObject *bsp_getFreq(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"freq", "be", "sequence", "fileName", "acc", NULL};
         PyObject *objSeq = NULL, *objFreq = NULL, *objBE = NULL, *objAcc = NULL;
         char *strFileName = NULL;
@@ -2645,7 +2634,6 @@ extern "C" {
     }
 
     static PyObject *bsp_getFreqIndex(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"result", "sequence", "fileName", "tmpl2", "tmpl3", "start", NULL};
         PyObject *objSeq = NULL, *objResult = NULL;
         char *strFileName = NULL;
@@ -2723,7 +2711,6 @@ extern "C" {
     }
 
     static PyObject *bsp_mostFrequent(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *fileName = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.mostFrequent", &fileName);
         if (!ok) {
@@ -2740,7 +2727,6 @@ extern "C" {
     }
 
     static PyObject *bsp_wordFreq(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *fileName = NULL;
         int wi = 0;
         int ok = PyArg_ParseTuple(args, "si:bsp.wordFreq", &fileName, &wi);
@@ -2754,7 +2740,6 @@ extern "C" {
     }
 
     static PyObject *bsp_lu(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"pathA", "P", "blockSize", NULL};
         PyObject *objP = NULL;
         char *strPathA = NULL;
@@ -2814,7 +2799,6 @@ extern "C" {
     }
 
     static PyObject *bsp_permute(PyObject *self, PyObject *args, PyObject *kwargs) {
-        bsp_getScriptPos();
         static const char * kwlist[] = {"pathA", "P", "dimPermute", NULL};
         PyObject *objP = NULL;
         char *strPathA = NULL;
@@ -2870,7 +2854,6 @@ extern "C" {
     }
 
     static PyObject *bsp_luSolve(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL, *strB = NULL, *strC = NULL;
         PyObject *objP = NULL;
         int ok = PyArg_ParseTuple(args, "sOss:bsp.luSolve", &strA, &objP, &strB, &strC);
@@ -2944,7 +2927,6 @@ extern "C" {
     }
 
     static PyObject *bsp_matrixMul(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL, *strB = NULL, *strC = NULL;
         int ok = PyArg_ParseTuple(args, "sss:bsp.matrixMul", &strA, &strB, &strC);
         if (!ok) {
@@ -3003,7 +2985,6 @@ extern "C" {
     }
 
     static PyObject *bsp_transpose(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL, *strB = NULL;
         int ok = PyArg_ParseTuple(args, "ss:bsp.transpose", &strA, &strB);
         if (!ok) {
@@ -3048,7 +3029,6 @@ extern "C" {
     }
 
     static PyObject *bsp_inverse(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL, *strB = NULL;
         int ok = PyArg_ParseTuple(args, "ss:bsp.inverse", &strA, &strB);
         if (!ok) {
@@ -3093,7 +3073,6 @@ extern "C" {
     }
 
     static PyObject *bsp_trace(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.trace", &strA);
         if (!ok) {
@@ -3125,7 +3104,6 @@ extern "C" {
     }
 
     static PyObject *bsp_det(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.det", &strA);
         if (!ok) {
@@ -3157,7 +3135,6 @@ extern "C" {
     }
 
     static PyObject *bsp_norm1(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.norm1", &strA);
         if (!ok) {
@@ -3189,7 +3166,6 @@ extern "C" {
     }
 
     static PyObject *bsp_norm2(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.norm2", &strA);
         if (!ok) {
@@ -3221,7 +3197,6 @@ extern "C" {
     }
 
     static PyObject *bsp_normInf(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.normInf", &strA);
         if (!ok) {
@@ -3253,7 +3228,6 @@ extern "C" {
     }
 
     static PyObject *bsp_normF(PyObject *self, PyObject *args) {
-        bsp_getScriptPos();
         char *strA = NULL;
         int ok = PyArg_ParseTuple(args, "s:bsp.normF", &strA);
         if (!ok) {
@@ -3468,6 +3442,47 @@ extern "C" {
         Py_CLEAR(myClass);
     }
 
+    void printStack(int frameLevel, PyCodeObject *code, int lineno) {
+        char *fileName=NULL;
+        int ok = PyArg_Parse(code->co_filename,"s",&fileName);
+        if (ok && fileName!=NULL) {
+            printf("#%d\t| %s: %d\n",frameLevel,fileName,lineno);
+        } else {
+            printf("#%d\t| UNKNOWN FILE: %d\n",frameLevel,lineno);
+        }
+    }
+
+    void printFrame(PyFrameObject *frame) {
+        int frameLevel=0;
+        PyCodeObject *code=frame->f_code;
+        int lineno = frame->f_lineno;
+        printStack(frameLevel++,code,lineno);
+
+        PyFrameObject *back = frame->f_back;
+        while (back != NULL) {
+            code=back->f_code;
+            lineno=back->f_lineno;
+            printStack(frameLevel++,code,lineno);
+            back=back->f_back;
+        }
+        PyErr_Print();
+    }
+
+    int bsp_tracefunc(PyObject *obj, PyFrameObject *frame, int what, PyObject *arg) {
+        if (PyTrace_EXCEPTION==what) {
+            printFrame(frame);
+            if (!bspErr_) {
+                PyObject *line = PyObject_Str(arg);  
+                if (line && (PyUnicode_Check(line))) {
+                    Py_UCS1 *errString=PyUnicode_1BYTE_DATA(line);
+                    int myProcID = (int)runtime_->getMyProcessID();
+                    printf("ERROR:proc %8d: %s\n",(int)myProcID, errString);
+                }
+            }
+        }
+        return 0;
+    }
+
     void initBSP(int *pArgc, char ***pArgv) {
         runtime_ = new Runtime(pArgc, pArgv);
         //runtime_->setVerbose(true);
@@ -3515,6 +3530,8 @@ extern "C" {
         module_ = module;
         addType("Dim", DimMethods, module);
         addType("Future", FutureMethods, module);
+
+        PyEval_SetTrace(bsp_tracefunc, NULL);
     }
 
 }
